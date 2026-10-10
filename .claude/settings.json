@@ -1,0 +1,29 @@
+{
+  "enabledPlugins": {
+    "pua@pua-skills": false
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/inject_reading.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/log_qa.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

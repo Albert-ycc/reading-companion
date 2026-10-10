@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>伴读</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/favicon.png">
+<meta name="theme-color" content="#F2EEE6">
+<!--
+  视觉方向：吕敬人「评点本」（design/direction-approved.md）。
+  一页书，读者拿藤黄荧光笔划，老师在页边用蓝黑墨水批；书名、页码印在中间的「版心」。
+  颜色只来自应用图标的两笔：靛 #233A5E、藤黄 #FFC43D；纸和墨的中性色借藤黄的色相。
+  字体全用系统自带，应用保持离线：宋体 Songti SC（原文译文、界面）、楷体 Kaiti SC（Claude 的讲解）、Charter（西文和数字）。
+-->
+<style>
+  :root {
+    --paper: oklch(0.975 0.009 88);      /* #F9F7F0 纸 */
+    --paper-deep: oklch(0.950 0.012 86); /* #F2EEE6 版心 */
+    --paper-hi: oklch(0.990 0.005 90);   /* #FDFCF8 输入底 */
+    --rule: oklch(0.860 0.014 82);       /* #D6D0C7 线 */
+    --rule-soft: oklch(0.915 0.012 84);  /* #E7E2DA 细线 */
+    --ink: oklch(0.24 0.012 70);         /* #231E19 墨，对纸 15.4:1 */
+    --ink-2: oklch(0.40 0.012 70);       /* #4C4741 次墨 */
+    --ink-3: oklch(0.53 0.012 72);       /* #706B64 注，4.9:1 */
+    --dian: oklch(0.348 0.070 259);      /* #233A5E 靛，图标底色 */
+    --dian-ink: oklch(0.300 0.060 259);  /* #1B2E4C 蓝黑，Claude 的字 */
+    --tenghuang: oklch(0.852 0.157 83.6);/* #FFC43D 藤黄，图标那道划线 */
+    --hl-now: oklch(0.852 0.157 83.6 / 0.66);
+    --hl-past: oklch(0.852 0.157 83.6 / 0.30);
+    --danger: oklch(0.50 0.15 30);
+
+    --latin: "Charter", "Songti SC", "STSong", serif;
+    --song: "Charter", "Songti SC", "STSong", serif;
+    --kai: "Charter", "Kaiti SC", "STKaiti", serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink);
+    font: 15px/1.6 var(--song); font-synthesis: none; -webkit-font-smoothing: antialiased;
+    line-break: strict; text-autospace: normal; font-variant-numeric: lining-nums; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  button:disabled { opacity: .45; cursor: default; }
+  [hidden] { display: none !important; }
+  ::selection { background: var(--hl-now); }
+
+  /* ───────── 三栏：书页 · 版心 · 批注 ───────── */
+  /* 批注栏宽度 --pi-col：拖版心时由 app.js 改写 */
+  .frame { --pi-col: clamp(340px, 30vw, 440px); display: grid; grid-template-columns: minmax(0, 1fr) 56px var(--pi-col); height: 100%; }
+  #left { position: relative; min-width: 0; }
+  body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+
+  /* ───────── 版心：取代顶栏 ───────── */
+  .spine { position: relative; display: flex; flex-direction: column; align-items: center; padding: 20px 0 18px;
+    background: linear-gradient(90deg, oklch(0.93 0.014 84) 0, transparent 12px, transparent 44px, oklch(0.93 0.014 84) 56px), var(--paper-deep);
+    min-height: 0; overflow: hidden; cursor: col-resize; user-select: none; } /* 版心就是书页和批注栏的分界，按住空白处左右拖 */
+  .spine::before, .spine::after { content: ""; position: absolute; top: 0; bottom: 0; width: 4px; }
+  body.resizing .spine::before, body.resizing .spine::after { border-color: var(--dian); }
+  .spine::before { left: 0; border-left: 1px solid var(--rule); border-right: 1px solid var(--rule-soft); }
+  .spine::after { right: 0; border-right: 1px solid var(--rule); border-left: 1px solid var(--rule-soft); }
+  .slip { writing-mode: vertical-rl; font: 400 13px/1 var(--song); letter-spacing: .3em; padding: 10px 7px 7px;
+    border: 1px solid var(--rule); border-radius: 2px; color: var(--ink-2); background: var(--paper-hi);
+    transition: border-color .15s, color .15s, background .15s; flex: none; }
+  .slip:hover { border-color: var(--dian); color: var(--dian); }
+  .slip.on { background: var(--dian); border-color: var(--dian); color: var(--paper); }
+  .slip + .slip { margin-top: 12px; }
+  .yuwei { width: 20px; height: 10px; fill: var(--dian); flex: none; }
+  .yuwei.up { margin-top: 30px; }
+  #spine-title { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 12px 0; }
+  #spine-title span { writing-mode: vertical-rl; max-height: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; /* 只占一列，放不下用省略号 */
+    font: italic 400 13px/1.25 var(--latin); color: var(--ink-2); }
+  #spine-title span.cjk { font: 400 16px/1 var(--song); font-style: normal; letter-spacing: .5em; color: var(--ink); }
+  #folio { margin-top: 14px; display: flex; flex-direction: column; align-items: center; font-family: var(--latin); flex: none; }
+  #folio b { font-size: 20px; font-weight: 400; line-height: 1; color: var(--ink); font-variant-numeric: oldstyle-nums; }
+  #folio i { width: 16px; height: 1px; background: var(--ink-3); margin: 6px 0; }
+  #folio span { font-size: 13px; line-height: 1; color: var(--ink-3); }
+  .spine .seal { margin-top: 18px; width: 26px; height: 26px; flex: none; }
+  #install { margin-top: 14px; }
+
+  /* ───────── 书页 ───────── */
+  #viewer { position: absolute; inset: 0; overflow: auto; padding: 28px 0 40vh; }
+  .page { position: relative; margin: 0 auto 52px; background: transparent; }
+  /* 双页：左右两页一排，放不下时 reader.js 去掉 spread 回到单页 */
+  #viewer.spread { display: grid; grid-template-columns: repeat(2, max-content); justify-content: safe center; align-content: start; gap: 52px 40px; }
+  #viewer.spread .page { margin: 0; }
+  .page::after { content: "— " attr(data-page) " —"; position: absolute; left: 0; right: 0; bottom: -34px;
+    text-align: center; font: 400 12px/1 var(--latin); color: var(--ink-3); letter-spacing: .08em; pointer-events: none; }
+  .page > canvas, .crop-inner canvas { mix-blend-mode: multiply; } /* 白纸印进纸色，书页和批注是同一张纸 */
+  .page > canvas { position: absolute; inset: 0; display: block; }
+  .hl { position: absolute; mix-blend-mode: multiply; pointer-events: none; z-index: 1; background: var(--hl-past);
+    border-radius: 2px 3px 3px 2px; clip-path: polygon(0.5% 0, 100% 0, 99.5% 100%, 0 100%); }
+  .hl.current { background: var(--hl-now); }
+  .pangxian { position: absolute; width: 2px; background: var(--dian); border-radius: 1px; z-index: 1; pointer-events: none; }
+  .ocr-badge { position: absolute; top: 10px; right: 10px; z-index: 3; display: flex; align-items: center; gap: 6px;
+    padding: 4px 9px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
+    font: 400 12px/1 var(--song); color: var(--ink-3); }
+  .ocr-badge::before, .tr.pending::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang);
+    animation: pulse 1.4s ease-in-out infinite; }
+  .ocr-badge.failed { cursor: pointer; color: var(--danger); }
+  .ocr-badge.failed::before { background: var(--danger); animation: none; }
+  .ocr-badge.failed:hover { border-color: var(--danger); }
+  body.dragging #left { outline: 1px dashed var(--dian); outline-offset: -14px; }
+
+  /* 中英对照：原图块 + 译文块 */
+  .page.bilingual { padding-bottom: 8px; }
+  .crop { position: relative; overflow: hidden; margin: 0 auto; }
+  .crop-inner { position: absolute; }
+  .crop-inner canvas { position: absolute; display: block; }
+  .tr { position: relative; margin: 0 auto; padding-top: 2px; padding-bottom: 16px; color: var(--ink);
+    font-family: var(--song); line-height: 1.75; text-align: justify; overflow-wrap: anywhere; }
+  .tr::before { content: "译"; position: absolute; left: calc(var(--indent, 0px) - 30px); top: 7px;
+    font: 400 12px/1 var(--song); color: var(--dian); border: 1px solid currentColor; border-radius: 2px; padding: 2px 2px 1px; }
+  .tr.pending { color: var(--ink-3); font-size: 12px !important; display: flex; align-items: center; gap: 8px; }
+  .tr.pending::after { order: -1; }
+  .tr.pending::before { opacity: .45; }
+  .tr.error { color: var(--danger); font-size: 12px !important; }
+
+  /* ───────── 书架 ───────── */
+  #library { position: absolute; inset: 0; overflow: auto; padding: 60px 48px 80px 56px; }
+  #library .inner { max-width: 900px; margin: 0 auto; }
+  .lib-intro { margin: 0; font: 400 15px/24px var(--song); color: var(--ink-2); }
+  .search { margin-top: 20px; height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 16px;
+    border: 1px solid var(--rule); border-radius: 4px; background: var(--paper-hi); }
+  .search:focus-within { border-color: var(--dian); }
+  .search svg { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
+  #search { flex: 1; border: 0; outline: 0; background: transparent; font: 400 15px/1 var(--song); color: var(--ink); }
+  #search::placeholder { color: var(--ink-3); }
+  .sec { margin: 0; font: 600 17px/24px var(--song); letter-spacing: .06em; color: var(--ink); }
+  .sec-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 56px; }
+  .sec-row .sec small { margin-left: 10px; font: 400 13px/1 var(--song); letter-spacing: 0; color: var(--dian); }
+  .btns { display: flex; gap: 10px; }
+  .btn { font: 400 14px/1 var(--song); padding: 10px 14px; border-radius: 3px; border: 1px solid var(--rule);
+    color: var(--ink); background: var(--paper-hi); transition: border-color .15s, color .15s, background .15s; }
+  .btn:hover { border-color: var(--dian); color: var(--dian); }
+  .btn.solid { background: var(--dian); border-color: var(--dian); color: var(--paper); }
+  .btn.solid:hover { background: var(--dian-ink); color: var(--paper); }
+  .muted { color: var(--ink-3); font: 400 14px/1.7 var(--song); }
+
+  /* 最近在读：书口厚度＝页数，书口里一道藤黄＝读到的位置 */
+  #recent { margin-top: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 30px 32px; }
+  .book { position: relative; display: block; color: inherit; text-decoration: none; cursor: pointer; min-width: 0; }
+  .book .obj { position: relative; display: flex; height: 160px; transition: transform .2s ease; }
+  .book .obj::after { content: ""; position: absolute; left: -18px; right: -18px; bottom: 0; height: 1px; background: var(--ink-3);
+    box-shadow: 0 1px 0 var(--paper-hi), 0 7px 10px -5px rgb(60 45 30 / .35); } /* 隔板，相邻几本连成一条 */
+  .book img, .book .plain { display: block; height: 160px; width: auto; max-width: calc(100% - var(--e, 4px)); flex: none; object-fit: cover; object-position: top;
+    box-shadow: 0 0 0 1px rgb(40 30 20 / .10), 2px 3px 8px -3px rgb(40 30 20 / .35); background: var(--paper-hi); }
+  .book .plain { width: 116px; padding: 16px 12px; font: 400 13px/1.5 var(--song); color: var(--ink-2); overflow: hidden;
+    border-top: 3px solid var(--dian); }
+  .book .edge { position: relative; width: var(--e, 4px); height: 154px; margin-top: 3px; flex: none;
+    background: repeating-linear-gradient(90deg, oklch(0.965 0.008 86) 0 1px, oklch(0.885 0.012 82) 1px 2px); border-right: 1px solid var(--rule); }
+  .book .edge i { position: absolute; top: -3px; bottom: -3px; left: var(--p, 0%); width: 1.5px; background: var(--tenghuang); }
+  .book:hover .obj { transform: translateY(-4px); }
+  .book .t { margin-top: 14px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+    font: 400 13.5px/1.45 var(--song); color: var(--ink); }
+  .book:hover .t { color: var(--dian); }
+  .book .bar { position: relative; height: 4px; margin-top: 10px; }
+  .book .bar::before { content: ""; position: absolute; left: 0; right: 0; top: 1.5px; height: 1px; background: var(--rule); }
+  .book .bar i { position: absolute; left: 0; top: 0; height: 4px; width: var(--p, 0%); border-radius: 2px; background: var(--tenghuang); }
+  .book .n { margin-top: 8px; font: 400 13px/1 var(--latin); color: var(--ink-2); }
+  .book .n small { font: 400 12px/1 var(--song); color: var(--ink-3); margin-left: 2px; }
+  .book .rm { position: absolute; top: -8px; right: -6px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--rule);
+    background: var(--paper-hi); color: var(--ink-3); font: 400 13px/20px var(--latin); opacity: 0; transition: opacity .15s; z-index: 2; }
+  .book:hover .rm { opacity: 1; }
+  .book .rm:hover { color: var(--danger); border-color: var(--danger); }
+
+  /* 搜索结果、书库文件夹：目录式点线 */
+  .toc { list-style: none; margin: 14px 0 0; padding: 0; border-top: 1px solid var(--rule); }
+  .toc li { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 8px 4px; border-bottom: 1px solid var(--rule-soft); transition: background .15s; }
+  .toc li:hover { background: var(--paper-deep); }
+  .toc .name { font: 400 16px/1.4 var(--song); color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toc a.name { text-decoration: none; cursor: pointer; }
+  .toc a.name:hover { color: var(--dian); }
+  .toc .leader { flex: 1; min-width: 24px; height: 2px; margin-top: 8px; opacity: .55;
+    background-image: radial-gradient(circle, var(--ink-3) 0.8px, transparent 1px); background-size: 6px 2px; background-repeat: repeat-x; }
+  .toc .count { font: 400 15px/1 var(--latin); color: var(--ink-2); white-space: nowrap; }
+  .toc .count small, .toc .path { font: 400 13px/1.4 var(--song); color: var(--ink-3); margin-left: 3px; }
+  .toc .path { max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toc .acts { display: flex; gap: 2px; margin-left: 6px; }
+  .toc .acts button { font: 400 13px/1 var(--song); color: var(--ink-3); padding: 7px 8px; border-radius: 3px; }
+  .toc .acts button:hover { color: var(--dian); background: var(--paper-hi); }
+  #results:not(:empty) { margin-bottom: 8px; }
+  #scan-status { font: 400 13px/1 var(--song); color: var(--dian); }
+  .drop { margin-top: 32px; height: 60px; display: flex; align-items: center; justify-content: center; gap: 10px;
+    border: 1px dashed var(--rule); border-radius: 4px; font: 400 14px/1 var(--song); color: var(--ink-3); }
+  .drop svg { width: 16px; height: 16px; fill: none; stroke: var(--ink-3); stroke-width: 1.4; }
+
+  /* ───────── 批注栏（问 Claude） ───────── */
+  #chat { display: flex; flex-direction: column; min-height: 0; padding: 0 28px 0 24px; background: var(--paper); }
+  .pi-head { flex: none; padding: 22px 0 16px; border-bottom: 1px solid var(--rule-soft); }
+  .pi-head .row { display: flex; justify-content: space-between; align-items: center; }
+  .pi-head h2 { margin: 0; font: 600 16px/24px var(--song); letter-spacing: .04em; color: var(--ink); }
+  #pi-book { margin: 6px 0 0; font: italic 400 13px/1.45 var(--latin); color: var(--ink-3); }
+  #pi-book:empty { display: none; }
+  .ghost { font: 400 13px/1 var(--song); color: var(--ink-2); border: 1px solid var(--rule); border-radius: 3px; padding: 7px 10px;
+    background: var(--paper-hi); transition: border-color .15s, color .15s; }
+  .ghost:hover { border-color: var(--dian); color: var(--dian); }
+
+  /* Claude 看到：读者划的那句，整句写全 */
+  #sees { flex: none; padding-top: 16px; }
+  #sees-label { display: flex; align-items: center; gap: 8px; font: 400 12.5px/18px var(--song); color: var(--ink-3); letter-spacing: .02em; }
+  #sees-label::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--dian); }
+  #sees-quote { margin: 6px 0 0; font: 400 15px/1.6 var(--latin); color: var(--ink);
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; }
+  #sees-quote mark { color: inherit; background: var(--hl-now); padding: .08em .12em; -webkit-box-decoration-break: clone; box-decoration-break: clone; border-radius: 2px; }
+  #sees-quote:empty { display: none; }
+
+  #messages { flex: 1; min-height: 0; overflow: auto; padding: 20px 0 8px;
+    -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 24px); mask-image: linear-gradient(180deg, transparent 0, #000 24px); } /* 往上滚出去的字渐隐，不是一刀切 */
+  .msg { position: relative; padding-left: 28px; margin-bottom: 20px; overflow-wrap: anywhere; }
+  .msg.user::before, .msg.assistant::before { position: absolute; left: 0; top: 5px; font: 400 12px/1 var(--song);
+    padding: 2px 2px 1px; border-radius: 2px; border: 1px solid currentColor; }
+  .msg.user { font: 400 15.5px/1.7 var(--song); color: var(--ink); white-space: pre-wrap; }
+  .msg.user::before { content: "问"; color: var(--ink-3); }
+  .msg.assistant { font: 400 16px/1.75 var(--kai); color: var(--dian-ink); } /* 栏窄、夹着长英文词，两端对齐会把整行中文撑开 */
+  .msg.assistant::before { content: "答"; color: var(--paper); background: var(--dian); border-color: var(--dian); top: 6px; }
+  .msg.assistant > :first-child { margin-top: 0; }
+  .msg.assistant p, .msg.assistant ul, .msg.assistant ol { margin: 6px 0; }
+  .msg.assistant strong { font-weight: 700; }
+  .msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4 { position: relative; margin: 16px 0 6px;
+    font: 600 15px/24px var(--song); color: var(--dian); letter-spacing: .03em; }
+  .msg.assistant h1::before, .msg.assistant h2::before, .msg.assistant h3::before { content: ""; position: absolute; left: -27px; top: 8px;
+    width: 12px; height: 7px; background: var(--dian); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 42%, 0 100%); } /* 小鱼尾 */
+  .msg.assistant ol { list-style: none; counter-reset: n; padding-left: 0; }
+  .msg.assistant ol > li { counter-increment: n; position: relative; padding-left: 20px; }
+  .msg.assistant ol > li + li, .msg.assistant ul > li + li { margin-top: 6px; }
+  .msg.assistant ol > li::before { content: counter(n) "."; position: absolute; left: 0; top: 0; font: 400 15px/28px var(--latin); color: var(--dian); }
+  .msg.assistant ul { padding-left: 18px; }
+  .msg.assistant ul > li::marker { color: var(--dian); }
+  .msg.assistant blockquote { margin: 8px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--rule); color: var(--ink-2); }
+  .msg.assistant code { font: 13px/1 ui-monospace, Menlo, monospace; background: var(--paper-deep); padding: 1px 4px; border-radius: 3px; }
+  .msg.assistant table { border-collapse: collapse; margin: 10px 0; font: 400 13.5px/1.5 var(--song); color: var(--ink); }
+  .msg.assistant th, .msg.assistant td { border-bottom: 1px solid var(--rule-soft); padding: 5px 10px 5px 0; text-align: left; vertical-align: top; }
+  .msg.assistant th { font-weight: 600; color: var(--dian); border-bottom-color: var(--rule); }
+  .msg.assistant hr { border: 0; border-top: 1px solid var(--rule-soft); margin: 14px 0; }
+  .msg.hint { padding-top: 10px; font: 400 17px/28px var(--kai); color: var(--dian-ink); }
+  .msg.hint::after { content: ""; display: block; height: 420px; margin-top: 10px;
+    background: repeating-linear-gradient(180deg, transparent 0 27px, var(--rule-soft) 27px 28px);
+    -webkit-mask-image: linear-gradient(180deg, #000 30%, transparent); mask-image: linear-gradient(180deg, #000 30%, transparent); } /* 一张等老师落笔的笺 */
+  .status { font: 400 14px/1.6 var(--kai); color: var(--ink-3); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .error { font: 400 14px/1.6 var(--song); color: var(--danger); }
+
+  .composer { flex: none; padding: 12px 0 20px; border-top: 1px solid var(--rule-soft); }
+  #chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  #chips button { font: 400 13px/1 var(--song); color: var(--ink-2); padding: 8px 10px; border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--paper-hi); transition: border-color .15s, color .15s; }
+  #chips button:hover { border-color: var(--dian); color: var(--dian); }
+  #ask { position: relative; margin-top: 10px; }
+  #q { display: block; width: 100%; height: 84px; resize: none; padding: 12px 14px 12px; border: 1px solid var(--rule); border-radius: 4px;
+    background: var(--paper-hi); font: 400 14.5px/1.6 var(--song); color: var(--ink); }
+  #q::placeholder { color: var(--ink-3); }
+  #q:hover { border-color: var(--ink-3); }
+  #q:focus { outline: 0; border-color: var(--dian); }
+  #send { position: absolute; right: 10px; bottom: 10px; font: 500 14px/1 var(--song); letter-spacing: .12em; color: var(--paper);
+    background: var(--dian); padding: 9px 14px 9px 16px; border-radius: 3px; }
+  #send:hover { background: var(--dian-ink); }
+
+  /* ───────── 批注栏视图外壳（问答 · 导读 · 导图） ───────── */
+  .pi-head h2:has(+ .tabs:not([hidden])) { display: none; } /* 有多个视图时标题让位给标签 */
+  .chat-tools { display: flex; gap: 8px; }
+  #chat-history.on { border-color: var(--dian); color: var(--dian); }
+  /* 历史对话：列表和只读查看 */
+  .hist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 4px 0 14px;
+    font: 400 13px/1.5 var(--song); color: var(--ink-3); }
+  .hist-head b { font-weight: 600; color: var(--ink); }
+  .hist-head button { font: 400 13px/1 var(--song); color: var(--dian); white-space: nowrap; }
+  .hist-tools { display: flex; gap: 14px; }
+  .hist-sub { display: block; margin-top: 2px; font-size: 12px; }
+  .hist-item { display: block; width: 100%; text-align: left; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); }
+  .hist-item:hover .hist-title { color: var(--dian); }
+  .hist-title { display: block; font: 400 15px/1.5 var(--song); color: var(--ink); }
+  .hist-meta { display: block; margin-top: 2px; font: 400 12px/1.4 var(--song); color: var(--ink-3); }
+  .hist-empty { font: 400 14px/1.7 var(--song); color: var(--ink-3); }
+  .msg.note { padding-left: 0; font: 400 13px/1.7 var(--song); color: var(--ink-3); border-top: 1px dashed var(--rule); padding-top: 10px; }
+  .tabs { display: flex; gap: 22px; align-items: flex-end; }
+  .tab { position: relative; padding: 2px 0 6px; font: 400 16px/24px var(--song); letter-spacing: .04em; color: var(--ink-3); transition: color .15s; }
+  .tab:hover { color: var(--ink); }
+  .tab.on { color: var(--ink); font-weight: 600; }
+  .tab.on::after { content: ""; position: absolute; left: -2px; right: -2px; bottom: 0; height: 3px; border-radius: 2px; background: var(--tenghuang); } /* 藤黄划线标出当前视图 */
+  .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #sees-quote .sees-img { display: block; max-width: 100%; max-height: 140px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi); }
+  /* 附图：输入框上方的缩略图 */
+  .attach { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .att { position: relative; display: block; }
+  .att img { display: block; height: 56px; max-width: 120px; object-fit: cover; border: 1px solid var(--rule); border-radius: 3px; }
+  .att button { position: absolute; top: -7px; right: -7px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--rule);
+    background: var(--paper-hi); color: var(--ink-3); font: 400 12px/18px var(--latin); }
+  .msg-att { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .msg-att img { height: 72px; max-width: 160px; object-fit: cover; border: 1px solid var(--rule); border-radius: 3px; }
+  /* 跳回原文：引句所在几行闪一下；找不到引句时整页闪 */
+  .textLayer span.flash { background: var(--hl-now); border-radius: 2px; animation: flash 1.8s ease-out; }
+  @keyframes flash { 0%, 50% { background: var(--hl-now); } 100% { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { .textLayer span.flash { animation: none; } }
+  /* 跳到原文之后，书页底部回到原处的按钮 */
+  #back-chip { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5; padding: 7px 14px; border: 1px solid var(--rule); border-radius: 999px;
+    background: var(--paper); color: var(--dian); font: 400 13px/1 var(--song); letter-spacing: .04em; box-shadow: 0 2px 10px oklch(0.3 0.03 83.6 / .12); }
+  #back-chip:hover { border-color: var(--dian); }
+  /* 标签旁的小点：生成中脉动藤黄，生成完人不在那个标签时静止的靛点 */
+  .tab .dot { position: absolute; top: 4px; right: -9px; width: 6px; height: 6px; border-radius: 50%; }
+  .tab .dot.busy { background: var(--tenghuang); animation: pulse 1.2s ease-in-out infinite; }
+  .tab .dot.done { background: var(--dian); }
+  .page.flash-page { outline: 2px solid var(--tenghuang); outline-offset: 6px; transition: outline-color 1.6s; }
+
+  #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(16px); opacity: 0; z-index: 20;
+    background: var(--dian); color: var(--paper); padding: 9px 16px; border-radius: 3px; font: 400 14px/1.4 var(--song);
+    transition: all .2s; max-width: calc(100% - 32px); pointer-events: none; }
+  #toast.show { opacity: .96; transform: translateX(-50%); }
+  #toast.show.has-action { pointer-events: auto; }
+  #toast button { margin-left: 14px; color: var(--tenghuang); font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+  /* 要密码的 PDF：打开时弹出的输入框 */
+  #pw-dialog { width: 320px; padding: 20px 22px 18px; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); color: var(--ink);
+    box-shadow: 0 8px 28px oklch(0.3 0.03 83.6 / .22); }
+  #pw-dialog::backdrop { background: oklch(0.24 0.012 70 / .32); }
+  #pw-dialog .pw-note { margin: 0 0 12px; font: 400 14.5px/1.6 var(--song); color: var(--ink-2); }
+  #pw-dialog .pw-note.wrong { color: var(--danger); }
+  #pw-dialog input { display: block; width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--paper-hi); font: 400 15px/1.4 var(--song); color: var(--ink); outline: 0; }
+  #pw-dialog input:focus { border-color: var(--dian); }
+  #pw-dialog .pw-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  /* 点一下已有划线时，旁边出的小菜单 */
+  #hl-menu { position: fixed; z-index: 15; background: var(--paper); border: 1px solid var(--rule); border-radius: 3px;
+    box-shadow: 0 2px 10px oklch(0.3 0.03 83.6 / .14); padding: 4px; }
+  #hl-menu button { display: block; padding: 7px 12px; font: 400 13px/1 var(--song); color: var(--ink); border-radius: 2px; }
+  #hl-menu button:hover { background: var(--hl-past); }
+
+  /* 以下为 pdf.js 4.10 官方 textLayer 样式（web/pdf_viewer.css 摘录），负责可选中的透明文字层 */
+  .textLayer { position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1; line-height: 1;
+    text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 2; }
+  .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+  .textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; }
+  .textLayer span.markedContent { top: 0; height: 0; }
+  .textLayer ::selection { background: var(--hl-now); }
+  .textLayer br::selection { background: transparent; }
+  .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+  .textLayer.selecting .endOfContent { top: 0; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <section id="left">
+      <div id="viewer" hidden></div>
+      <button id="back-chip" type="button" hidden></button>
+      <div id="library">
+        <div class="inner">
+          <p class="lib-intro">打开一本书，选中一段就是划线，在右边直接问 Claude。</p>
+          <label class="search">
+            <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="7.6" cy="7.6" r="5.6"/><path d="M11.8 11.8L16 16"/></svg>
+            <input id="search" type="search" placeholder="搜书名或文献名，多个关键词用空格隔开" autocomplete="off">
+          </label>
+          <ul id="results" class="toc" hidden></ul>
+          <div class="sec-row"><h3 class="sec">最近在读</h3></div>
+          <div id="recent"></div>
+          <div class="sec-row">
+            <h3 class="sec">书库文件夹<small id="scan-status"></small></h3>
+            <div class="btns">
+              <button id="open-file" class="btn">打开单个 PDF</button>
+              <button id="add-root" class="btn solid">添加书库文件夹</button>
+            </div>
+          </div>
+          <ul id="roots" class="toc"></ul>
+          <div class="drop">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.6 6.8L8 10.2l3.4-3.4M2.5 11v2.5h11V11"/></svg>
+            也可以把 PDF 直接拖进这个窗口。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="spine" aria-label="版心" title="按住版心空白处左右拖，调整书页和批注栏的宽度">
+      <button id="home" class="slip on" title="回到书架">书架</button>
+      <button id="bi-toggle" class="slip" role="switch" title="在每段英文下面插入中文译文">中英对照</button>
+      <button id="region-btn" class="slip" type="button" hidden title="在书页上拖出一个框，把图、表格或公式发给 Claude。也可以按住 ⌥ 直接拖">框选</button>
+      <svg class="yuwei up" viewBox="0 0 20 10" aria-hidden="true"><path d="M0 0H20V10L10 4.4L0 10Z"/></svg>
+      <div id="spine-title"><span class="cjk">伴读</span></div>
+      <svg class="yuwei" viewBox="0 0 20 10" aria-hidden="true"><path d="M0 10H20V0L10 5.6L0 0Z"/></svg>
+      <div id="folio" hidden><b id="folio-n"></b><i></i><span id="folio-total"></span></div>
+      <button id="install" class="slip" hidden>安装到桌面</button>
+      <img class="seal" src="/icons/icon-192.png" alt="伴读" draggable="false">
+    </nav>
+
+    <aside id="chat">
+      <header class="pi-head">
+        <div class="row"><h2>问 Claude</h2><nav id="tabs" class="tabs" hidden></nav><span class="chat-tools"><button id="chat-history" class="ghost">历史</button><button id="chat-reset" class="ghost">新对话</button></span></div>
+        <p id="pi-book"></p>
+      </header>
+      <div class="view" id="view-chat">
+        <div id="sees" hidden>
+          <div id="sees-label"></div>
+          <p id="sees-quote"></p>
+        </div>
+        <div id="messages"></div>
+      </div>
+      <footer class="composer">
+        <div id="chips"><button>这段什么意思</button><button>举个例子</button><button>和我的工作有什么关系</button></div>
+        <div id="attach" class="attach" hidden></div>
+        <form id="ask">
+          <textarea id="q" placeholder="回车发送，Shift+回车换行"></textarea>
+          <button id="send">发送</button>
+        </form>
+      </footer>
+    </aside>
+  </div>
+  <div id="toast"></div>
+  <!-- 功能模块各自的样式：框选、「/」菜单、输入预测、导读、导图 -->
+  <link rel="stylesheet" href="/css/region.css">
+  <link rel="stylesheet" href="/css/slash.css">
+  <link rel="stylesheet" href="/css/predict.css">
+  <link rel="stylesheet" href="/css/guide.css">
+  <link rel="stylesheet" href="/css/mindmap.css">
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+/* 划线后的输入预测：输入框上方三条，当前那条用藤黄标出、同时以灰字显示在输入框里 */
+.composer.predicting #chips { display: none; } /* 三条占用快捷按钮那一行 */
+#predict { margin-bottom: 2px; }
+#predict[hidden] { display: none; }
+.pd-status { display: flex; align-items: center; gap: 8px; padding: 6px 0 4px; font: 400 13px/1.4 var(--song); color: var(--ink-3); }
+.pd-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang); animation: pulse 1.2s ease-in-out infinite; }
+.pd-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 2px 0 6px;
+  font: 400 12px/1.4 var(--song); color: var(--ink-3); letter-spacing: .04em; }
+.pd-keys { white-space: nowrap; letter-spacing: 0; }
+#predict kbd { display: inline-block; min-width: 16px; padding: 1px 4px 0; text-align: center;
+  font: 400 11px/1.3 var(--latin); color: var(--ink-2); border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi); }
+.pd-item { position: relative; padding: 6px 44px 7px 12px; border-radius: 3px; cursor: pointer;
+  font: 400 14px/1.55 var(--song); color: var(--ink-2); }
+.pd-item:hover { color: var(--ink); background: var(--paper-deep); }
+.pd-item[aria-selected="true"] { color: var(--ink); background: var(--paper-deep); }
+.pd-item[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 0 2px 2px 0; background: var(--tenghuang); } /* 和「/」菜单的当前项同一个标法 */
+#predict .pd-tab { position: absolute; right: 8px; top: 8px; }
+/* 第三条「深一层」：靛色小标，和书页上「译」字标同一个画法 */
+.pd-deep { display: inline-block; margin-right: 7px; padding: 1px 3px 0; vertical-align: 1px;
+  font: 400 11.5px/1.3 var(--song); color: var(--dian); border: 1px solid currentColor; border-radius: 2px; }

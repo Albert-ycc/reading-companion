@@ -1,0 +1,168 @@
+/* 导图视图：Mind Elixir 5.15.1 的评点本皮肤 + 视图外壳（范围条、节点卡、确认层、章节下拉）。
+   token 沿用 index.html 的 :root（纸、墨、藤黄、靛），这里不新增颜色。设计稿与说明见 design/mindmap/。 */
+@import url("../vendor/mind-elixir/MindElixir.css");
+
+.mm-view { position: relative; }
+.mm-view[hidden] { display: none; }
+
+/* ───────── 范围条 ───────── */
+.mm-scope { flex: none; padding-top: 12px; }
+.mm-scope .row { display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.mm-scope-btn { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 0 1 auto; font: 600 15px/24px var(--song); letter-spacing: .02em; color: var(--ink); text-align: left; cursor: default; }
+.mm-scope-btn.can { cursor: pointer; }
+.mm-scope-btn.can:hover { color: var(--dian); }
+.mm-scope-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-scope-btn svg { flex: none; width: 10px; height: 6px; fill: none; stroke: var(--ink-3); stroke-width: 1.4; }
+.mm-sub .pg { flex: none; white-space: nowrap; font: italic 400 12.5px/1 var(--latin); } /* 页范围不在中间折断 */
+.mm-scope .sp { flex: 1; }
+.mm-tool { flex: none; padding: 6px 7px; border-radius: 3px; font: 400 13px/1 var(--song); white-space: nowrap; color: var(--ink-2); }
+.mm-tool:hover:not(:disabled) { color: var(--dian); background: var(--paper-deep); }
+.mm-tool:disabled { color: var(--ink-3); opacity: .5; cursor: default; }
+.mm-tool.more { padding: 3px 7px 7px; font: 400 17px/1 var(--latin); letter-spacing: .08em; }
+.mm-sub { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 2px; padding-bottom: 10px; font: 400 12.5px/18px var(--song); color: var(--ink-3); }
+.mm-sub > span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.mm-sub > span:last-child { flex: none; white-space: nowrap; } /* 右侧是存盘状态和按钮，不折行；左边的字让路 */
+.mm-sub .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang); animation: pulse 1.4s ease-in-out infinite; flex: none; }
+.mm-sub .bad { color: var(--danger); }
+.mm-sub button { font: inherit; color: var(--dian); }
+.mm-sub button:hover { text-decoration: underline; }
+
+/* ───────── 画布：通栏，抵消批注栏的左右内边距 ───────── */
+.mm-canvas { position: relative; flex: 1; min-height: 0; margin: 0 -28px 0 -24px; border-top: 1px solid var(--rule-soft); }
+.mm-hostwrap { position: absolute; inset: 0; }
+.mm-host { height: 100%; }
+.mm-edge { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; pointer-events: none; z-index: 4; background: linear-gradient(90deg, var(--paper), transparent); }
+.mm-btn { font: 400 13px/1 var(--song); color: var(--ink-2); border: 1px solid var(--rule); border-radius: 3px; padding: 7px 10px; background: var(--paper-hi); transition: border-color .15s, color .15s; white-space: nowrap; }
+.mm-btn:hover:not(:disabled) { border-color: var(--dian); color: var(--dian); }
+.mm-btn:disabled { opacity: .45; cursor: default; }
+.mm-btn.solid { background: var(--dian); border-color: var(--dian); color: var(--paper); }
+.mm-btn.solid:hover:not(:disabled) { background: var(--dian-ink); color: var(--paper); }
+.mm-btn.danger { color: var(--danger); }
+.mm-toast { position: absolute; left: 24px; right: 24px; bottom: 10px; z-index: 8; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--dian); color: var(--paper); padding: 9px 14px; border-radius: 3px; font: 400 14px/1.4 var(--song); }
+.mm-toast button { color: var(--paper); font: 600 14px/1 var(--song); letter-spacing: .08em; border-bottom: 1px solid var(--hl-now); padding-bottom: 1px; }
+
+/* ───────── 节点卡 ───────── */
+.mm-card { flex: none; min-height: 176px; padding: 14px 0 20px; border-top: 1px solid var(--rule); }
+.mm-card h3 { margin: 0; font: 600 15px/24px var(--song); letter-spacing: .03em; }
+.mm-card p { margin: 6px 0 0; font: 400 14px/1.65 var(--song); color: var(--ink-2); }
+.mm-card p.tiny { margin-top: 8px; font-size: 12.5px; color: var(--ink-3); }
+.mm-card .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.mm-card .nd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.mm-card .nd-head .t { min-width: 0; font: 600 16px/1.45 var(--song); overflow-wrap: anywhere; }
+.mm-card .nd-head .t.claude { font: 400 17px/1.45 var(--kai); color: var(--dian-ink); }
+.mm-card .nd-head .pg { flex: none; font: italic 400 13px/1 var(--latin); color: var(--ink-3); }
+.mm-card .nd-meta { margin-top: 2px; font: 400 12.5px/18px var(--song); color: var(--ink-3); }
+.mm-card .nd-meta i { font-family: var(--latin); }
+.mm-card .nd-quote { margin: 8px 0 0; font: 400 14px/1.6 var(--latin); color: var(--ink); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; overflow-wrap: anywhere; cursor: pointer; }
+.mm-card .nd-quote.open { display: block; -webkit-line-clamp: unset; }
+.mm-card .nd-quote mark { color: inherit; background: var(--hl-now); padding: .08em .12em; border-radius: 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.mm-card .nd-quote.none { font: 400 13.5px/1.6 var(--song); color: var(--ink-3); }
+
+/* ───────── 遮罩、确认层、菜单、章节下拉 ───────── */
+.mm-scrim { position: absolute; inset: 0; z-index: 7; background: oklch(0.975 0.009 88 / .55); }
+.mm-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 9; padding: 18px 0 20px; background: var(--paper-hi); border-top: 1px solid var(--dian); box-shadow: 0 -16px 28px -18px rgb(60 45 30 / .45); }
+.mm-sheet h3 { margin: 0; font: 600 16px/24px var(--song); }
+.mm-sheet ul { list-style: none; margin: 10px 0 0; padding: 0; }
+.mm-sheet li { display: grid; grid-template-columns: 76px 1fr; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--rule-soft); font: 400 14px/1.55 var(--song); }
+.mm-sheet li:last-child { border-bottom: 0; }
+.mm-sheet li b { font-weight: 600; color: var(--dian); letter-spacing: .06em; }
+.mm-sheet li.del b { color: var(--ink-3); }
+.mm-sheet p { margin: 8px 0 0; font: 400 12.5px/1.6 var(--song); color: var(--ink-3); }
+.mm-sheet .btns { display: flex; gap: 8px; margin-top: 14px; }
+.mm-menu { position: absolute; z-index: 10; min-width: 188px; padding: 5px 0; background: var(--paper-hi); border: 1px solid var(--rule); border-radius: 4px; box-shadow: 0 14px 26px -14px rgb(60 45 30 / .5); font: 400 14px/1 var(--song); }
+.mm-menu button { display: block; width: 100%; padding: 10px 14px; text-align: left; color: var(--ink); }
+.mm-menu button:hover:not(:disabled) { background: var(--paper-deep); color: var(--dian); }
+.mm-menu button:disabled { color: var(--ink-3); opacity: .6; cursor: default; }
+.mm-menu .foot { padding: 9px 14px; border-top: 1px solid var(--rule-soft); font: 400 12.5px/1.5 var(--song); color: var(--ink-3); }
+.mm-chap { list-style: none; margin: 0; padding: 4px 0; max-height: 440px; overflow: auto; }
+.mm-chap li { display: flex; align-items: baseline; gap: 10px; padding: 9px 14px; font: 400 14px/1.4 var(--song); cursor: pointer; }
+.mm-chap li:hover { background: var(--paper-deep); }
+.mm-chap li.cur { background: var(--paper-deep); }
+.mm-chap li .n { flex: none; width: 4.6em; font: 400 12.5px/1 var(--song); color: var(--ink-3); }
+.mm-chap li .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-chap li.here .nm { font-weight: 600; }
+.mm-chap li .ld { flex: 1; min-width: 14px; height: 2px; align-self: center; opacity: .55; background-image: radial-gradient(circle, var(--ink-3) 0.8px, transparent 1px); background-size: 6px 2px; background-repeat: repeat-x; }
+.mm-chap li .st { flex: none; font: 400 12.5px/1 var(--song); color: var(--ink-3); }
+.mm-chap li .st.ok { color: var(--dian); }
+.mm-chap li .rib { flex: none; width: 6px; height: 15px; margin: 0 4px 0 -14px; align-self: center; background: var(--dian); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
+
+/* ───────── 没有可用的目录、提示 ───────── */
+.mm-empty { flex: 1; min-height: 0; padding: 26px 0 0; overflow: auto; border-top: 1px solid var(--rule-soft); }
+.mm-empty h3 { margin: 0; font: 600 17px/26px var(--song); letter-spacing: .03em; }
+.mm-empty p { margin: 10px 0 0; font: 400 14.5px/1.75 var(--song); color: var(--ink-2); }
+.mm-empty .why { margin: 14px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+.mm-empty .why li { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule-soft); font: 400 13.5px/1.5 var(--song); color: var(--ink-2); }
+.mm-empty .why li span:first-child { flex: none; width: 5.5em; color: var(--ink-3); }
+.mm-opt { margin-top: 16px; padding: 14px 16px 16px; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper-hi); }
+.mm-opt h4 { margin: 0; font: 600 14.5px/22px var(--song); letter-spacing: .03em; }
+.mm-opt p { margin: 4px 0 0; font-size: 13.5px; line-height: 1.65; color: var(--ink-3); }
+.mm-opt .range { display: flex; align-items: center; gap: 8px; margin-top: 10px; font: 400 14px/1 var(--song); color: var(--ink-2); }
+.mm-opt .range input { width: 64px; height: 32px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper); font: 400 14.5px/1 var(--latin); color: var(--ink); text-align: center; }
+.mm-opt .range input:focus { outline: 0; border-color: var(--dian); }
+.mm-opt .range .eta { margin-left: auto; font-size: 12.5px; color: var(--ink-3); }
+.mm-opt .btns { display: flex; gap: 8px; margin-top: 12px; }
+.mm-blank { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 12px; font: 400 14.5px/1.8 var(--song); color: var(--ink-3); text-align: center; }
+
+/* ───────── Mind Elixir 皮肤 ───────── */
+.mm-host .map-container { background: transparent; font-family: var(--song); font-size: 14px; line-height: 1.45; color: var(--ink); outline: 0; }
+
+/* 根：竖排题签，和版心里的竖排书名同一个做法 */
+.mm-host me-root { margin: 0 !important; }
+.mm-host me-root me-tpc { padding: 12px 6px !important; border-radius: 2px; border: 0 !important; background: var(--dian) !important; color: var(--paper) !important;
+  font: italic 400 13px/1.2 var(--latin) !important; letter-spacing: .02em; max-width: none !important; }
+.mm-host me-root me-tpc .text { display: block; writing-mode: vertical-rl; max-height: 176px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-host me-root me-tpc.cjk .text { font: 400 15px/1 var(--song); font-style: normal; letter-spacing: .3em; }
+
+/* 节点：字落在线上，不画框 */
+.mm-host me-parent { padding: 3px var(--node-gap-x) !important; margin-top: 0 !important; }
+.mm-host me-parent me-tpc { position: relative; max-width: 146px !important; padding: 1px 1px 3px !important; border-radius: 0 !important; background: transparent;
+  color: var(--ink); font: 400 14px/1.4 var(--song); overflow-wrap: anywhere; white-space: normal !important; text-wrap: pretty; line-break: strict; }
+.mm-host me-main > me-wrapper > me-parent > me-tpc { max-width: 120px !important; padding: 2px 2px 3px !important; border: 0 !important; border-bottom: 1.5px solid var(--dian) !important;
+  font: 600 15px/1.35 var(--song); letter-spacing: .02em; }
+.mm-host me-main > me-wrapper { margin: var(--main-gap-y) var(--main-gap-x) !important; }
+.mm-host me-main > me-wrapper > me-parent { margin: 0 !important; padding: 0 !important; }
+.mm-host me-tpc .text { display: inline; }
+.mm-host me-tpc .tags { display: inline; direction: ltr; }
+.mm-host me-tpc .tags span { display: inline-block; margin: 0 0 0 5px; padding: 0; background: none; border-radius: 0; color: var(--ink-3); font: 400 12px/1 var(--latin); vertical-align: 1px; letter-spacing: 0; }
+.mm-host me-tpc .tags span.pg { font-style: italic; }
+.mm-host me-tpc .tags span.stamp { padding: 1px 1px 0; border: 1px solid currentColor; border-radius: 2px; font: 400 11px/1 var(--song); vertical-align: 1px; }
+.mm-host me-tpc .tags span.stamp.ka { color: var(--danger); }
+.mm-host me-tpc .tags span.stamp.wo { color: var(--ink-3); }
+
+/* 选中 = 荧光笔划过这个节点 */
+.mm-host .selected, .mm-host me-tpc.selected { outline: 0 !important; }
+.mm-host me-parent me-tpc.selected .text { background: linear-gradient(transparent 12%, var(--hl-now) 12%, var(--hl-now) 92%, transparent 92%); box-decoration-break: clone; -webkit-box-decoration-break: clone; padding: 0 2px; margin: 0 -2px; }
+
+/* 圈点、书签带、占位与失败 */
+.mm-host me-tpc[data-trace]::before { content: ""; position: absolute; left: -9px; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang); }
+.mm-host me-tpc[data-trace="2"]::before { box-shadow: 0 0 0 2px var(--hl-now); }
+.mm-host me-tpc[data-trace-in]:not([data-trace])::before { content: ""; position: absolute; left: -9px; top: .62em; width: 5px; height: 5px; border-radius: 50%; border: 1px solid var(--tenghuang); background: var(--paper); }
+.mm-host me-tpc[data-here]::after { content: ""; position: absolute; left: -12px; top: 1px; width: 6px; height: 15px; background: var(--dian); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%); }
+.mm-host me-tpc[data-here][data-trace]::before, .mm-host me-tpc[data-here][data-trace-in]::before { left: -22px; }
+.mm-host me-tpc[data-pending] .text { color: var(--ink-3) !important; font-style: normal; }
+.mm-host me-tpc[data-pending]::before { content: ""; position: absolute; left: -11px; top: .6em; width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang); animation: pulse 1.4s ease-in-out infinite; }
+.mm-host me-tpc[data-failed] .text { color: var(--danger) !important; }
+.mm-host me-tpc[data-failed][data-undone] .text { color: var(--ink-3) !important; }
+.mm-host me-parent me-tpc .insert-preview.show { background: var(--hl-now) !important; border-radius: 2px; opacity: 1; }
+.mm-host .mind-elixir-ghost { background: var(--paper-hi) !important; border: 1px solid var(--dian) !important; color: var(--ink) !important; border-radius: 3px !important; font: 400 14px/1.4 var(--song); padding: 3px 8px !important; }
+
+/* 展开圈：折叠时写子孙总数 */
+.mm-host me-epd { width: 16px !important; height: 16px !important; margin-top: 0; border: 1px solid var(--rule); border-radius: 50%; background: var(--paper-hi) none !important; opacity: 1 !important; color: var(--ink-3);
+  font: 400 11px/14px var(--latin); text-align: center; display: block; right: -6px; }
+.mm-host me-main > me-wrapper > me-parent > me-epd { right: -19px !important; }
+.mm-host me-epd::after { content: attr(data-n); }
+.mm-host me-epd.minus { opacity: 0 !important; }
+.mm-host me-epd.minus::after { content: "−"; font-size: 13px; }
+.mm-host me-parent:hover > me-epd.minus { opacity: 1 !important; }
+.mm-host me-epd:hover { border-color: var(--dian); color: var(--dian); }
+
+/* 线：细、暖灰，不抢字 */
+.mm-host .lines path, .mm-host .subLines path { stroke-width: 1.1px; stroke-linecap: round; }
+.mm-host .lines path { stroke: var(--dian); stroke-width: 1.4px; opacity: .85; }
+.mm-host .subLines path { stroke: oklch(0.70 0.016 80); }
+
+/* 行内改名框 */
+.mm-host #input-box { background: var(--paper-hi) !important; outline: 1px solid var(--dian) !important; border-radius: 2px; color: var(--ink) !important; font-family: var(--song); max-width: 152px !important; }
+.mm-host .selection-area { background: oklch(0.348 0.07 259 / .08); border: 1px solid var(--dian); }
+.mm-host .context-menu { display: none; }

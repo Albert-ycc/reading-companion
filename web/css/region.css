@@ -1,0 +1,27 @@
+/* 框选：藤黄虚线框 + 很淡的底色，框住的是图、表、公式，不盖住内容 */
+:root {
+  --region-line: oklch(0.70 0.14 76);   /* 藤黄加深一档：纸上的虚线要看得清 */
+  --region-fill: oklch(0.852 0.157 83.6 / 0.12);
+}
+
+/* 按住 ⌥ 或点了「框选」：书页上光标变十字，告诉用户现在拖就是框选 */
+body.region-on #viewer, body.region-on #viewer * { cursor: crosshair !important; }
+body.region-dragging { user-select: none; -webkit-user-select: none; }
+
+.region-hint { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 8; pointer-events: none;
+  display: flex; align-items: center; gap: 8px; padding: 7px 14px; border: 1px solid var(--rule); border-radius: 3px;
+  background: var(--paper-hi); color: var(--ink-2); font: 400 13px/1.3 var(--song); white-space: nowrap;
+  box-shadow: 0 6px 16px -10px rgb(60 45 30 / .5); }
+.region-hint::before { content: ""; width: 8px; height: 8px; flex: none; border: 1.5px dashed var(--region-line); border-radius: 1.5px; background: var(--region-fill); }
+
+/* 拖框过程中的框（屏幕坐标，不随页滚动） */
+.region-drag { position: fixed; z-index: 14; pointer-events: none; box-sizing: border-box;
+  border: 1.5px dashed var(--region-line); border-radius: 3px; background: var(--region-fill); }
+.region-drag.busy { border-style: solid; animation: region-pulse 1s ease-in-out infinite; }
+@keyframes region-pulse { 50% { background: oklch(0.852 0.157 83.6 / 0.3); } }
+
+/* 记在页上的框：过去的淡，当前这一块（Claude 正看着的）更醒目 */
+.hl.region { background: oklch(0.852 0.157 83.6 / 0.05); border: 1.5px dashed oklch(0.70 0.14 76 / 0.5);
+  border-radius: 3px; clip-path: none; }
+.hl.region.current { background: var(--region-fill); border: 2px dashed var(--region-line);
+  box-shadow: 0 0 0 3px oklch(0.852 0.157 83.6 / 0.28); }

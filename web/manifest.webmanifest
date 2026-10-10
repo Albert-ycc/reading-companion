@@ -1,0 +1,19 @@
+{
+  "name": "伴读",
+  "short_name": "伴读",
+  "description": "边读 PDF 边问 Claude：选中即划线，Claude 知道你在读哪一段",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ecebe7",
+  "theme_color": "#233a5e",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "file_handlers": [
+    { "action": "/", "accept": { "application/pdf": [".pdf"] } }
+  ]
+}
