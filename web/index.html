@@ -46,7 +46,7 @@
   /* ───────── 三栏：书页 · 版心 · 批注 ───────── */
   /* 批注栏宽度 --pi-col：拖版心时由 app.js 改写 */
   .frame { --pi-col: clamp(340px, 30vw, 440px); display: grid; grid-template-columns: minmax(0, 1fr) 56px var(--pi-col); height: 100%; }
-  #left { position: relative; min-width: 0; }
+  #left { position: relative; min-width: 0; overflow: hidden; } /* 缩放预览时阅读区整体放大，别盖到版心上 */
   body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
 
   /* ───────── 版心：取代顶栏 ───────── */
@@ -73,6 +73,14 @@
   #folio b { font-size: 20px; font-weight: 400; line-height: 1; color: var(--ink); font-variant-numeric: oldstyle-nums; }
   #folio i { width: 16px; height: 1px; background: var(--ink-3); margin: 6px 0; }
   #folio span { font-size: 13px; line-height: 1; color: var(--ink-3); }
+  /* 书页缩放：页码下面一竖排 ＋ 百分比 －；手动定过大小时百分比转靛色，点它回到自动 */
+  #zoom { margin-top: 16px; display: flex; flex-direction: column; align-items: center; gap: 6px; flex: none; }
+  #zoom-in, #zoom-out { width: 24px; height: 24px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
+    font: 400 16px/22px var(--latin); color: var(--ink-2); transition: border-color .15s, color .15s; }
+  #zoom-in:not(:disabled):hover, #zoom-out:not(:disabled):hover { border-color: var(--dian); color: var(--dian); }
+  #zoom-val { font: 400 12px/1 var(--latin); color: var(--ink-3); padding: 2px 0; cursor: default; }
+  #zoom.manual #zoom-val { color: var(--dian); cursor: pointer; }
+  #zoom.manual #zoom-val:hover { text-decoration: underline; text-underline-offset: 3px; }
   .spine .seal { margin-top: 18px; width: 26px; height: 26px; flex: none; }
   #install { margin-top: 14px; }
 
@@ -231,6 +239,22 @@
   .msg.assistant th, .msg.assistant td { border-bottom: 1px solid var(--rule-soft); padding: 5px 10px 5px 0; text-align: left; vertical-align: top; }
   .msg.assistant th { font-weight: 600; color: var(--dian); border-bottom-color: var(--rule); }
   .msg.assistant hr { border: 0; border-top: 1px solid var(--rule-soft); margin: 14px 0; }
+  /* 划线、问题、回答一组：组头是这几问对着的那句划线（点它跳回书页），左边一道藤黄竖线把这几轮问答串起来 */
+  .qa { position: relative; margin-bottom: 28px; }
+  .qa::before { content: ""; position: absolute; left: 8px; top: 14px; bottom: 4px; width: 2px; border-radius: 1px; background: var(--hl-past); }
+  .qa > .msg:last-child { margin-bottom: 0; }
+  .qa .msg.user::before { background: var(--paper); } /* 竖线从「问」字标底下穿过，不划过字 */
+  .quote { position: relative; display: block; width: 100%; margin-bottom: 14px; padding-left: 28px; text-align: left;
+    font: 400 14.5px/1.65 var(--latin); color: var(--ink); }
+  .quote::before { content: "划"; position: absolute; left: 0; top: 4px; padding: 2px 2px 1px; border: 1px solid var(--tenghuang); border-radius: 2px;
+    background: var(--tenghuang); font: 400 12px/1 var(--song); color: var(--ink); }
+  .quote-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  .quote mark { color: inherit; background: var(--hl-past); padding: .06em .1em; border-radius: 2px;
+    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .quote img { display: block; max-width: 100%; max-height: 120px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi); }
+  .quote-at { display: block; margin-top: 4px; font: 400 12px/1.4 var(--song); color: var(--ink-3); transition: color .15s; }
+  .quote:hover mark { background: var(--hl-now); }
+  .quote:hover .quote-at { color: var(--dian); }
   .msg.hint { padding-top: 10px; font: 400 17px/28px var(--kai); color: var(--dian-ink); }
   .msg.hint::after { content: ""; display: block; height: 420px; margin-top: 10px;
     background: repeating-linear-gradient(180deg, transparent 0 27px, var(--rule-soft) 27px 28px);
@@ -289,7 +313,9 @@
   /* 跳回原文：引句所在几行闪一下；找不到引句时整页闪 */
   .textLayer span.flash { background: var(--hl-now); border-radius: 2px; animation: flash 1.8s ease-out; }
   @keyframes flash { 0%, 50% { background: var(--hl-now); } 100% { background: transparent; } }
-  @media (prefers-reduced-motion: reduce) { .textLayer span.flash { animation: none; } }
+  .hl.flash { animation: hl-flash 1.8s ease-out; } /* 对话栏里点划线跳回来：这条划线闪一下 */
+  @keyframes hl-flash { 0%, 50% { background: var(--tenghuang); box-shadow: 0 0 0 3px var(--hl-now); } }
+  @media (prefers-reduced-motion: reduce) { .textLayer span.flash, .hl.flash { animation: none; } }
   /* 跳到原文之后，书页底部回到原处的按钮 */
   #back-chip { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5; padding: 7px 14px; border: 1px solid var(--rule); border-radius: 999px;
     background: var(--paper); color: var(--dian); font: 400 13px/1 var(--song); letter-spacing: .04em; box-shadow: 0 2px 10px oklch(0.3 0.03 83.6 / .12); }
@@ -373,6 +399,11 @@
       <div id="spine-title"><span class="cjk">伴读</span></div>
       <svg class="yuwei" viewBox="0 0 20 10" aria-hidden="true"><path d="M0 10H20V0L10 5.6L0 0Z"/></svg>
       <div id="folio" hidden><b id="folio-n"></b><i></i><span id="folio-total"></span></div>
+      <div id="zoom" hidden>
+        <button id="zoom-in" type="button" title="放大书页（也可以在书页上双指张开，或按住 ⌘ 滚动）" aria-label="放大书页">+</button>
+        <button id="zoom-val" type="button"></button>
+        <button id="zoom-out" type="button" title="缩小书页（也可以在书页上双指捏合）" aria-label="缩小书页">−</button>
+      </div>
       <button id="install" class="slip" hidden>安装到桌面</button>
       <img class="seal" src="/icons/icon-192.png" alt="伴读" draggable="false">
     </nav>

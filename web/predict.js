@@ -6,6 +6,7 @@
 import { readingContext } from "./reader.js";
 import { $, el } from "./ui.js";
 import { currentView } from "./panel.js";
+import { answering } from "./chat.js";
 
 const input = $("#q");
 const composer = $(".composer");
@@ -14,21 +15,31 @@ box.setAttribute("role", "listbox");
 box.setAttribute("aria-label", "你可能想问");
 $("#chips").before(box);
 
+const PREDICT_DELAY = 1000; // 划线后停这么久没再划才去猜：连划几句时只为最后一句起进程（每次猜都是一个 claude 进程）
 let state = "idle"; // idle 没有预测（快捷按钮照旧）/ loading 正在猜 / ready 三条已出
 let preds = [];
 let deep = -1; // 深一层那条在 preds 里的下标，没有时 -1
 let active = 0;
 let forText = ""; // 这组预测对应的划线文字：Claude 看到的换了（点了别的旧划线），这组就作废
+let timer = null; // 等着去猜的那一下
 let ctrl = null; // 在途的预测请求；换一句划线时中止，服务端随即杀掉 claude
+let skipped = ""; // 不在问答视图、或 Claude 正在答题时划的那句：切回来 / 答完再猜
 let savedPlaceholder = null; // 输入框原来的提示语，灰字预测收起时放回去
 const kbd = (t) => el("kbd", { textContent: t });
 
-function reset() {
+function cancel() {
+  clearTimeout(timer);
+  timer = null;
   ctrl?.abort();
   ctrl = null;
+}
+
+function reset() {
+  cancel();
   state = "idle";
   preds = [];
   forText = "";
+  skipped = "";
   render();
 }
 
@@ -36,7 +47,7 @@ function reset() {
 const stale = () => state !== "idle" && readingContext()?.selection?.text !== forText;
 
 function render() {
-  if (stale()) { ctrl?.abort(); ctrl = null; state = "idle"; preds = []; forText = ""; }
+  if (stale()) { cancel(); state = "idle"; preds = []; forText = ""; }
   const own = state !== "idle" && currentView() === "chat";
   composer.classList.toggle("predicting", own); // 占住快捷按钮那一行
   const show = own && !input.value; // 自己打字时收起，删空了再出来
@@ -79,17 +90,27 @@ function adopt(i) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-async function start() {
+function start() {
   const ctx = readingContext();
   const sel = ctx?.selection;
   if (!sel?.text || sel.kind) return reset(); // 只为文字划线猜；框选的是图表，另说
-  ctrl?.abort();
-  const mine = ctrl = new AbortController();
+  reset();
+  // 不在问答视图（猜出来也看不见）、Claude 正在答题：先不猜，切回来 / 答完再猜这一句
+  if (currentView() !== "chat" || answering()) { skipped = sel.text; return; }
   state = "loading";
-  preds = [];
   active = 0;
   forText = sel.text;
   render();
+  timer = setTimeout(() => { timer = null; predict(ctx, sel); }, PREDICT_DELAY);
+}
+
+// 先前没猜的那句还是「Claude 看到」的：现在猜
+function resume() {
+  if (skipped && readingContext()?.selection?.text === skipped) start();
+}
+
+async function predict(ctx, sel) {
+  const mine = ctrl = new AbortController();
   let res = null;
   try {
     const r = await fetch("/api/predict", {
@@ -128,10 +149,11 @@ input.addEventListener("keydown", (e) => {
 }, true);
 input.addEventListener("input", render);
 input.addEventListener("focus", render);
-$("#ask").addEventListener("submit", () => { if (!input.value) reset(); }); // chat.js 先处理：发出去了输入框就空了，这时收起；没发出去（Claude 还在答）预测留着
+window.addEventListener("question-sent", reset); // 一问发出去了（输入框、快捷按钮、「/」菜单都算）就收起；没发出去（Claude 还在答）预测留着
 
 window.addEventListener("highlight", (e) => { if (!e.detail?.kind) start(); });
-window.addEventListener("highlight-removed", (e) => { if (e.detail?.text === forText) reset(); });
+window.addEventListener("highlight-removed", (e) => { if (e.detail?.text === forText || e.detail?.text === skipped) reset(); });
 window.addEventListener("focus-passage", reset); // Claude 看到的换成了一段译文或导读里的原文
 window.addEventListener("book-opened", reset);
-window.addEventListener("view-changed", render);
+window.addEventListener("answer-done", resume);
+window.addEventListener("view-changed", () => { render(); resume(); });

@@ -1,7 +1,7 @@
 // 对话栏：问题发给本地服务，服务调本机 Claude Code（带伴读 hook 和你的记忆），回答逐字流回来。
 // 每本书一个对话，换书自动切换；「新对话」清掉这本书的上下文。
 import { marked } from "./vendor/marked.esm.js";
-import { currentBook, removeHighlight, readingContext } from "./reader.js";
+import { currentBook, removeHighlight, readingContext, revealHighlight, tidyText } from "./reader.js";
 import { $, toast, api, el } from "./ui.js";
 import { showView, currentView } from "./panel.js";
 
@@ -49,7 +49,7 @@ function downNote(what) {
 // 回答不完整时注在回答下面；服务端存的是原因字符串
 const incompleteNote = (reason) => el("div", { className: "error", textContent: "回答不完整" + (typeof reason === "string" && reason ? "：" + reason : "") });
 
-function bubble(role, text, attachments = [], interrupted = null) {
+function bubble(role, text, attachments = [], interrupted = null, into = box) {
   const node = el("div", { className: "msg " + role });
   if (role === "user") {
     node.textContent = text;
@@ -59,13 +59,87 @@ function bubble(role, text, attachments = [], interrupted = null) {
     node.innerHTML = render(text || "");
     if (interrupted) node.append(incompleteNote(interrupted));
   }
-  box.append(node);
+  into.append(node);
   return node;
+}
+
+// ---------- 划线、问题、回答排成一组 ----------
+// 每一问记着提问时 Claude 看到的那段（quote：划线、框选，或导读里「接着问」的那段），没划线直接问的没有。
+// 对着同一句接着问的几轮归在同一组：组头写一次划线原文，左边一道藤黄竖线把这几轮问答串起来。点组头跳回书页上那个位置
+const quoteKey = (q) => q.hl || `${q.page}\n${q.text}`;
+
+function quoteNode(q) {
+  const node = el("button", { type: "button", className: "quote", title: "点一下跳回书页上的这一处" });
+  const words = () => el("span", { className: "quote-text" }, el("mark", { textContent: tidyText(q.text) }));
+  if (q.image) {
+    // 缩略图跟着框选划线走：划线删掉后图就取不到了，改写框里的文字
+    const img = el("img", { src: q.image, alt: "框选的区域" });
+    img.addEventListener("error", () => img.replaceWith(words()), { once: true });
+    node.append(img);
+  } else node.append(words());
+  node.append(el("span", { className: "quote-at", textContent: `第 ${q.page} 页 · 跳到原文` }));
+  node.addEventListener("click", () => jumpTo(q));
+  return node;
+}
+
+async function jumpTo(q) {
+  if (!currentBook()) return toast("这本书没打开，跳不过去");
+  if ($("#viewer").hidden) return toast("书架开着：先打开这本书，再点这句划线");
+  if (!(await revealHighlight(q))) toast(`第 ${q.page} 页上没找到这句，停在了这一页`);
+}
+
+// 一问该放在哪：有 quote 就放进它那一组（对话栏最后一组正是这句就接着放，否则新开一组），没有就直接放在对话栏里
+function holder(quote) {
+  if (!quote) return box;
+  const last = box.lastElementChild;
+  if (last?.classList.contains("qa") && last.dataset.qk === quoteKey(quote)) return last;
+  const g = el("div", { className: "qa" }, quoteNode(quote));
+  g.dataset.qk = quoteKey(quote);
+  box.append(g);
+  return g;
+}
+
+// 页面先画出了问题、服务端随后才说这一问对着哪段：把问、答挪进那一组
+function regroup(t) {
+  if (!t.quote || !t.user?.isConnected || t.user.parentElement !== box) return;
+  const stick = nearBottom(); // 组头插在问题上面，把回答往下推；原来贴着底就接着贴底，回答才会一直跟着滚
+  const prev = t.user.previousElementSibling;
+  let g = prev?.classList.contains("qa") && prev.dataset.qk === quoteKey(t.quote) ? prev : null;
+  if (!g) {
+    g = el("div", { className: "qa" }, quoteNode(t.quote));
+    g.dataset.qk = quoteKey(t.quote);
+    t.user.before(g);
+  }
+  g.append(t.user, t.out);
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+
+// 撤下一问的问、答；它所在的组里没有别的问题了，组头也一起撤掉
+function unmount(t) {
+  const g = t.user?.parentElement;
+  t.user?.remove();
+  t.out?.remove();
+  if (g?.classList.contains("qa") && !g.querySelector(".msg.user")) g.remove();
+}
+
+// 一段对话（当前的或历史里的）的全部消息按组画进对话栏：回答跟着它前面那一问走
+function paintMessages(messages) {
+  let into = box;
+  for (const m of messages) {
+    if (m.role === "user") into = holder(m.quote && typeof m.quote === "object" ? m.quote : null);
+    bubble(m.role, m.text, m.attachments || [], m.interrupted, into);
+  }
 }
 
 function nearBottom() {
   return box.scrollHeight - box.scrollTop - box.clientHeight < 80;
 }
+
+// 对话栏被下面的输入区挤矮（答到一半又划了一句、预测冒出来，输入框打成多行，附了图）时，离底距离一下子变大，
+// 回答就不再跟着往下滚。记下最后一次滚动时贴没贴底，栏高一变按它补滚。栏收起（切到导读、导图）时高度是 0，不算
+let atBottom = true;
+box.addEventListener("scroll", () => { if (box.clientHeight) atBottom = nearBottom(); }, { passive: true });
+new ResizeObserver(() => { if (box.clientHeight && atBottom) box.scrollTop = box.scrollHeight; }).observe(box);
 
 // 当前对话取不到：不能画成空对话的提示笺，那会让人以为这本书没聊过
 function loadFailedNote(err) {
@@ -97,14 +171,14 @@ export async function loadChat() {
   const { messages = [], inflight = null } = (!failed && chat) || {};
   // 等响应的这段时间里这一问恰好答完存盘：这份响应可能是存盘前取的，再取一次
   if (turn?.key === key && turn.phase === "done" && turn.doneAt >= started) return loadChat();
-  for (const m of messages) bubble(m.role, m.text, m.attachments || [], m.interrupted);
+  paintMessages(messages);
   rounds = messages.filter((m) => m.role === "user").length;
   if (rounds >= LONG_ROUNDS) box.append(longNote());
   // 这一页自己发出的提问（进行中或出错）还没存进服务端，得从内存里接回来
   const live = turn?.key === key && turn.phase !== "done";
   if (live) { mountTurn(turn); if (turn.phase === "error") restore(turn); }
   // 刷新前发出的提问，Claude 还在答：服务端记着，这里接上并等它答完
-  else if (inflight && !busy()) startGhost({ key, title, question: inflight.question || "", at: inflight.at, note: "这本书有一问正在回答，答完会自动显示" });
+  else if (inflight && !busy()) startGhost({ key, title, question: inflight.question || "", quote: inflight.quote || null, at: inflight.at, note: "这本书有一问正在回答，答完会自动显示" });
   const other = !failed && chat?.busyElsewhere;
   if (other && typeof other === "object" && !busy()) startElsewhere({ key: other.file, title: typeof other.title === "string" ? other.title : "" });
   if (failed) box.append(loadFailedNote(failed));
@@ -147,7 +221,7 @@ export function addAttachment(a) {
 // ---------- 提问 ----------
 // 这一页自己发出的那一问。服务端同一时间只答一个，页面这边也只留一个；带 key 是为了换书回来能接上，
 // 答完时人不在这本书，就不去碰对话栏。phase：run 进行中 / error 失败（没存） / done 已答完（已存盘）
-let turn = null; // { key, title, typed, question, attachments, ctx, t0, acc, status, phase, error, interrupted, user, out }
+let turn = null; // { key, title, typed, question, attachments, ctx, quote, t0, acc, status, phase, error, interrupted, user, out }
 // 页面刷新后发现服务端还在答刷新前发出的提问：{ key, question, at, note, user, out, timer }
 let ghost = null;
 
@@ -157,6 +231,7 @@ let elsewhere = null;
 // 此刻服务端在答的那一问：自己发的，或刷新、断线后从服务端记录里接回来的，或别的书里的
 const running = () => (turn?.phase === "run" ? turn : ghost || elsewhere);
 const busy = () => !!running();
+export const answering = busy; // 划线预测用：Claude 正在答题时不猜
 const busyHere = () => running()?.key === scopeKey;
 const shortTitle = (t) => (t.length > 18 ? t.slice(0, 18) + "…" : t);
 const nameOf = (r) => (r.title ? `《${shortTitle(r.title)}》` : "另一本书");
@@ -166,9 +241,13 @@ const busyHint = () => {
 };
 
 let foreign = null; // 别的书的提问还没答完时，在这本书的对话栏末尾说明为什么发不出去
+let wasBusy = false;
 function syncBusy() {
-  $("#send").disabled = busy();
-  $("#send").title = busy() ? busyHint() : "";
+  const b = busy();
+  $("#send").disabled = b;
+  $("#send").title = b ? busyHint() : "";
+  if (wasBusy && !b) window.dispatchEvent(new Event("answer-done")); // 答完了：划线预测补猜答题期间划的那句
+  wasBusy = b;
   const r = running();
   const need = r && r.key !== scopeKey && viewing === null;
   if (!need) { foreign?.remove(); foreign = null; return; }
@@ -196,8 +275,10 @@ export function ask(question) {
 }
 
 function launch(typed, attachments) {
+  // 发出去了：划线预测收起。快捷按钮、「/」菜单、导读的「接着问」都直接调 ask()，不经过输入框的提交
+  window.dispatchEvent(new Event("question-sent"));
   // 上一次失败的那一问不再留着：重新发的是它就等于重试，发的是别的就是不要了
-  if (turn?.phase === "error") { turn.user?.remove(); turn.out?.remove(); }
+  if (turn?.phase === "error") unmount(turn);
   // 按下发送这一刻的书、页、划线，不让 Claude 启动时再去读全局状态；
   // 刚换书、阅读状态还停在上一本时书对不上，宁可不给也不给错
   const ctx = readingContext();
@@ -219,8 +300,9 @@ function launch(typed, attachments) {
 function mountTurn(t) {
   if (t.key !== scopeKey || viewing !== null || t.user?.isConnected) return;
   box.querySelector(".msg.hint")?.remove();
-  t.user = bubble("user", t.question, t.attachments);
-  t.out = bubble("assistant", "");
+  const into = holder(t.quote);
+  t.user = bubble("user", t.question, t.attachments, null, into);
+  t.out = bubble("assistant", "", [], null, into);
   paintTurn(t);
   box.scrollTop = box.scrollHeight;
 }
@@ -287,8 +369,7 @@ function retry(t) {
   const atts = t.attachments.filter((a) => !a.removed);
   for (const a of atts) { const i = pending.indexOf(a); if (i >= 0) pending.splice(i, 1); }
   renderAttachments();
-  t.user.remove();
-  t.out.remove();
+  unmount(t);
   if (t.typed || atts.length) launch(t.typed, atts); // 图都被移除了、又没有字，就没什么可重发的
 }
 
@@ -323,7 +404,10 @@ async function run(t) {
         buf = buf.slice(i + 1);
         if (!line.trim()) continue;
         const ev = JSON.parse(line);
-        if (ev.type === "delta") {
+        if (ev.type === "quote") {
+          t.quote = ev.quote && typeof ev.quote === "object" ? ev.quote : null;
+          regroup(t);
+        } else if (ev.type === "delta") {
           t.acc += ev.text;
           schedulePaint(t);
         } else if (ev.type === "tool") {
@@ -375,7 +459,7 @@ async function recover(t) {
   if (chat?.inflight) {
     if (turn === t) turn = null; // 往后由服务端的记录接着管
     cancelPaint(t); // 排着队的重画会把等待说明刷掉
-    return startGhost({ key: t.key, title: t.title, question: t.question, at: chat.inflight.at, note: "连接断了，Claude 还在回答这一问，答完会自动显示", user: t.user, out: t.out, acc: t.acc });
+    return startGhost({ key: t.key, title: t.title, question: t.question, quote: t.quote, at: chat.inflight.at, note: "连接断了，Claude 还在回答这一问，答完会自动显示", user: t.user, out: t.out, acc: t.acc });
   }
   if (savedAfter(messagesOf(chat), t.question, t.t0)) {
     t.phase = "done";
@@ -391,8 +475,9 @@ async function recover(t) {
 function startGhost(g) {
   ghost = g;
   if (!g.user) {
-    g.user = bubble("user", g.question);
-    g.out = bubble("assistant", "");
+    const into = holder(g.quote);
+    g.user = bubble("user", g.question, [], null, into);
+    g.out = bubble("assistant", "", [], null, into);
   }
   paintGhost(g);
   syncBusy();
@@ -430,7 +515,7 @@ function endGhost(g, messages, down) {
     return;
   }
   // 没存下来：把它变成一条失败的提问，问题放回输入框，可以重试
-  const t = turn = { key: g.key, title: g.title, typed: g.question, question: g.question, attachments: [], t0: Date.now(), acc: g.acc || "", phase: "error", user: g.user, out: g.out };
+  const t = turn = { key: g.key, title: g.title, typed: g.question, question: g.question, quote: g.quote, attachments: [], t0: Date.now(), acc: g.acc || "", phase: "error", user: g.user, out: g.out };
   t.error = { text: "回答中断了，这一问没保存。" + (down ? "伴读的本地服务也没在运行了。" : ""), down, retryable: true };
   if (here) { paintNow(t); restore(t); }
   syncBusy();
@@ -545,7 +630,7 @@ async function showArchived(id) {
       el("button", { type: "button", textContent: "‹ 列表", onclick: showHistoryList }),
       el("button", { type: "button", textContent: "回到当前对话", onclick: loadChat })));
   box.replaceChildren(head);
-  for (const m of c.messages || []) bubble(m.role, m.text, m.attachments || [], m.interrupted);
+  paintMessages(c.messages || []);
   box.scrollTop = 0;
 }
 

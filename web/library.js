@@ -11,6 +11,7 @@ export function showLibrary() {
   document.title = "伴读";
   setSpineTitle("伴读");
   $("#folio").hidden = true;
+  $("#zoom").hidden = true;
   $("#home").classList.add("on");
   renderRecent();
   renderRoots();

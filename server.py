@@ -772,6 +772,12 @@ class Handler(SimpleHTTPRequestHandler):
             ask_titles[key] = title.strip()[:200] if isinstance(title, str) else ""
             self._begin_ndjson()
             ctx_env, snap, snap_path = self._ask_snapshot(key, body)
+            sel = (snap or {}).get("selection") or {}
+            with data_lock:
+                quote = quote_of(sel, hit_of(read_json(HIGHLIGHTS, {}), key, sel))
+            if quote:  # 这一问对着的那段：页面据此把问、答排进那句划线的一组；刷新后从 inflight 接回时也带上
+                ask_inflight[key]["quote"] = quote
+                self._say({"type": "quote", "quote": quote})
             with data_lock:
                 chats = read_json(CHATS, {})
                 entry = chats.get(key)
@@ -790,15 +796,15 @@ class Handler(SimpleHTTPRequestHandler):
             page = (snap or {}).get("page")  # 提问时读到哪页，导读按章筛历史用
             msgs = [
                 {"role": "user", "text": question, "at": now, **({"page": page} if page else {}),
-                 **({"attachments": [{"url": a.get("url", "")} for a in attachments]} if attachments else {})},
+                 **({"attachments": [{"url": a.get("url", "")} for a in attachments]} if attachments else {}),
+                 **({"quote": quote} if quote else {})},
                 {"role": "assistant", "text": answer, "at": now, **({"interrupted": error} if error else {})},
             ]
             with data_lock:
                 save_turn(key, cid, msgs, session)
                 # 问的是一条划线时，在划线记录上标「问过」，导图据此给节点加外圈
-                sel = (snap or {}).get("selection") or {}
                 hls = read_json(HIGHLIGHTS, {})
-                hit = next((h for h in reversed(hls.get(key, [])) if sel.get("text") and h.get("text") == sel.get("text") and h.get("page") == sel.get("page")), None)
+                hit = hit_of(hls, key, sel)
                 if hit and not hit.get("asked"):
                     hit["asked"] = True
                     write_json(HIGHLIGHTS, hls)
@@ -938,6 +944,33 @@ def new_cid():
     return uuid.uuid4().hex[:12]
 
 
+def hit_of(hls, key, sel):
+    """selection 对应划线库里的哪一条：同页、同文字的最后一条；不是划线（导读里「接着问」的那段）返回 None"""
+    return next((h for h in reversed(hls.get(key, [])) if sel.get("text") and h.get("text") == sel.get("text") and h.get("page") == sel.get("page")), None)
+
+
+QUOTE_CHARS = 2000  # 记在提问上的划线原文最多留多少字：对话栏只显示前几行，跳回原文按划线 id 或开头几十字找
+
+
+def quote_of(sel, hit):
+    """这一问是对着哪段问的：提问时 Claude 看到的划线、框选，或导读、导图里「接着问」的那段。
+    记在提问上，对话栏据此把划线、问题、回答排成一组，点它跳回书页上那个位置。没划线直接问的返回 None。
+    hit 是划线库里对应的那条：有它就记下 id（跳回时按位置找），框选的缩略图也取它的（selection 里存的是本机路径）"""
+    text = sel.get("text") if isinstance(sel.get("text"), str) else ""
+    page = sel.get("page")
+    if not text.strip() or type(page) is not int:
+        return None
+    quote = {"text": text[:QUOTE_CHARS], "page": page}
+    if isinstance(sel.get("kind"), str) and sel["kind"]:
+        quote["kind"] = sel["kind"]
+    if hit:
+        if hit.get("id"):
+            quote["hl"] = hit["id"]
+        if isinstance(hit.get("image"), str) and hit["image"]:
+            quote["image"] = hit["image"]
+    return quote
+
+
 def save_turn(key, cid, msgs, session):
     """存一轮问答。cid 是开问时这段对话的身份；回答期间对话被另一个窗口收进历史了，
     就补进那一段，不动新对话（否则这一问成了新对话的第一条，还把新对话接回旧的 Claude 会话）。调用方持有 data_lock"""
@@ -983,9 +1016,20 @@ def valid_attachments(items):
 
 
 # ---------- 调 Claude 子进程：提问、翻译、导读、导图都走这里 ----------
+# `claude setup-token` 生成的一年期令牌，tools/claude-token.sh 存进来（权限 600）。
+# 有它就不靠命令行登录：那份登录会过期、刷不动，后台提问就全报 OAuth 错误
+TOKEN_FILE = DATA / "claude-oauth-token"
+
+
 def _claude_env(**extra):
     env = dict(os.environ)
     env["PATH"] = f"{Path(CLAUDE_BIN).parent}:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
+    try:  # 每次现读：换了令牌不用重启服务，删掉文件就回到命令行登录
+        token = TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        token = ""
+    if token:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     env.update(extra)
     return env
 
@@ -1079,16 +1123,19 @@ def run_claude(cmd, prompt, cwd, env, on_event, timeout, session=None, cancel=No
 
 
 def claude_once(system, prompt, model="sonnet", timeout=240, on_text=None, tools="", thinking=False, cancel=None):
-    """一次性调 Claude（不带伴读的 hook 和 CLAUDE.md，不留会话记录）。
+    """一次性调 Claude（不带任何 hook 和 CLAUDE.md——伴读的、用户全局的都不带，不留会话记录）。
     on_text 给了就流式回调每段增量文字；cancel 是 threading.Event，置位后半秒内杀掉进程，错误返回「已取消」。
     返回 (全文, 错误)。翻译、导读、导图这类生成任务用。"""
     work = DATA / "claude-work"
     work.mkdir(parents=True, exist_ok=True)
+    # 用户全局的 CLAUDE.md、记忆索引和 SessionStart hook 跟翻译一段英文毫无关系，却每个进程都带着：
+    # 实测一次翻译输入 22079 token、首字 2.3–3.7 秒；关掉后 835 token、首字 2 秒
     cmd = [CLAUDE_BIN, "-p", "--model", model, "--system-prompt", system, "--tools", tools,
            "--strict-mcp-config", "--setting-sources", "user", "--no-session-persistence",
-           "--settings", json.dumps({"enabledPlugins": {"pua@pua-skills": False}}),
+           "--settings", json.dumps({"enabledPlugins": {"pua@pua-skills": False}, "disableAllHooks": True}),
            "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
     env = _claude_env()
+    env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
     if not thinking:  # 关掉思考：实测三段翻译从 12 秒降到 4 秒
         env["MAX_THINKING_TOKENS"] = "0"
     parts, joiner = [], TextJoiner()

@@ -2,7 +2,7 @@
 // Claude Code 的 UserPromptSubmit hook 再把它带进每一次提问。
 import * as pdfjsLib from "./vendor/pdfjs/pdf.min.mjs";
 import { $, el, toast, api, apiOk, whyFailed, setSpineTitle } from "./ui.js";
-import { planPage, restructure, resetTranslations, enqueue, pump } from "./bilingual.js";
+import { planPage, restructure, refill, resetTranslations, enqueue, pump } from "./bilingual.js";
 
 // 绝对路径：真 worker 起不来时 pdf.js 改走主线程里的假 worker，相对路径会按 pdf.min.mjs 所在目录再拼一层 vendor/pdfjs
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.mjs";
@@ -21,6 +21,7 @@ let shownRange = null;
 let fileKey = "";
 let bookTitle = "";
 let scale = 1;
+let userScale = null; // 读者手动定的缩放（版心的 ＋ −、在书页上双指缩放），每本书各记各的；null＝按阅读区宽度自动
 let spread = false; // 双页：左右两页一排
 let layoutSeq = 0; // 第几次重排：重排前开始的渲染，await 回来发现变了就放弃，不往清空后的页里再塞一层画布
 let base = null; // 第 1 页在 scale=1 时的尺寸，用来定整本的缩放
@@ -118,8 +119,7 @@ function renderSees() {
       return;
     }
     const mark = document.createElement("mark");
-    // PDF 换行在中文之间留下的空白去掉，西文之间留一个空格
-    mark.textContent = seenSel.text.replace(/([\u3400-\u9fff，。、；：！？）」])\s+(?=[\u3400-\u9fff（「])/g, "$1").replace(/\s+/g, " ");
+    mark.textContent = tidyText(seenSel.text);
     $("#sees-quote").replaceChildren(mark);
     $("#sees-quote").title = mark.textContent;
   } else {
@@ -130,6 +130,9 @@ function renderSees() {
   }
 }
 
+// 划线原文拿来显示：PDF 换行在中文之间留下的空白去掉，西文之间留一个空格
+export const tidyText = (t) => t.replace(/([\u3400-\u9fff，。、；：！？）」])\s+(?=[\u3400-\u9fff（「])/g, "$1").replace(/\s+/g, " ");
+
 function showCtx(hl) {
   seenSel = { page: hl.page, text: hl.text, image: hl.image };
   renderSees();
@@ -138,6 +141,7 @@ function showCtx(hl) {
 // 版心里的页码
 function renderFolio() {
   $("#folio").hidden = !pdf;
+  renderZoom();
   if (!pdf) return;
   $("#folio-n").textContent = currentPage || 1;
   $("#folio-total").textContent = pdf.numPages;
@@ -251,8 +255,15 @@ export async function openBook(file, key, title) {
     pdf = doc;
     bookKeyOf.set(doc, key);
     base = first;
+    zoomPending = null;
+    clearTimeout(zoomTimer);
+    viewer.style.transform = "";
+    userScale = savedZoom(key);
     stateSnap = null;
+    lazy.disconnect(); // 旧书的页不再观察：它们的页码和新书的对得上，会把新书的页当成划走了
+    keep.disconnect();
     viewer.replaceChildren();
+    textLayers.clear();
     pageText.clear();
     rendering.clear();
     scanned.clear();
@@ -320,6 +331,12 @@ const SPREAD_GAP = 40; // 两页之间的空，和 index.html 里 #viewer.spread
 function fit() {
   const w = viewer.clientWidth || window.innerWidth;
   const h = viewer.clientHeight || window.innerHeight;
+  if (userScale) {
+    // 手动定了大小：字就按这个大小画，只看放不放得下两页（左右并排放得下、整页高也放得下）
+    const two = !bilingual && pdf.numPages >= 2
+      && base.width * userScale * 2 + SPREAD_GAP + 96 <= w && base.height * userScale + 60 <= h;
+    return { scale: userScale, spread: two };
+  }
   // 留出左边「译」字标和页边的位置；版面再宽也不超过 900px，一行太长眼睛来回扫累
   const single = Math.min(Math.max((Math.min(w - 96, 900)) / base.width, 0.6), 2);
   if (bilingual || pdf.numPages < 2) return { scale: single, spread: false };
@@ -332,21 +349,53 @@ function layout() {
   ({ scale, spread } = fit());
   layoutSeq++;
   viewer.classList.toggle("spread", spread);
+  for (const job of jobs.values()) { job.cancelled = true; job.task?.cancel(); }
+  jobs.clear();
+  near.clear(); // 重新观察时按新的位置报上来
   rendering.clear();
+  textLayers.clear();
   ocrFailed.clear(); // 页上的内容整个重建，失败角标也跟着没了，重新渲染时会重新识别
   for (const div of pageDivs) {
     lazy.unobserve(div);
+    keep.unobserve(div);
     div.replaceChildren();
     div.classList.remove("bilingual");
     div.style.width = base.width * scale + "px";
     div.style.height = base.height * scale + "px";
     div.style.setProperty("--scale-factor", scale);
     lazy.observe(div);
+    keep.observe(div);
   }
+  renderZoom();
 }
 
-// 重排前后，阅读线（35% 高处，和判定当前页的线一致）停在同一页的同一个高度比例上：
-// 双页改单页、单页改回双页之后，读到的那几行还在眼前
+// 内容坐标 y 落在哪一排，返回这一排左页的下标（双页时同一排两页的 offsetTop 相同）
+function rowAt(y) {
+  let lo = 0, hi = pageDivs.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi + 1) >> 1;
+    if (pageDivs[m].offsetTop <= y) lo = m; else hi = m - 1;
+  }
+  while (lo > 0 && pageDivs[lo - 1].offsetTop === pageDivs[lo].offsetTop) lo--;
+  return lo;
+}
+
+// 重排，并让阅读区里 (x, y) 这一点（默认是 35% 高处的阅读线，和判定当前页的线一致）停在同一页的同一个比例上：
+// 双页改单页、放大缩小之后，读到的那几行还在眼前。双页时按 x 落在左页还是右页取页，在右页上缩放不会跳回左页
+function relayout(y = viewer.clientHeight * 0.35, x = viewer.clientWidth / 2) {
+  let i = rowAt(viewer.scrollTop + y);
+  const cx = viewer.scrollLeft + x;
+  if (pageDivs[i + 1]?.offsetTop === pageDivs[i].offsetTop && cx >= pageDivs[i + 1].offsetLeft) i++;
+  const div = pageDivs[i];
+  const at = (viewer.scrollTop + y - div.offsetTop) / div.offsetHeight;
+  const ax = (cx - div.offsetLeft) / div.offsetWidth;
+  pinStop?.();
+  layout();
+  viewer.scrollTop = div.offsetTop + at * div.offsetHeight - y;
+  viewer.scrollLeft = div.offsetLeft + ax * div.offsetWidth - x;
+  updatePage(); // 双页和单页互换时页码可能没变、也不一定触发滚动，眼前是一页还是两页要自己补
+}
+
 let resizeTimer;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
@@ -354,53 +403,209 @@ new ResizeObserver(() => {
     if (!pdf || !viewer.clientWidth) return;
     const next = fit();
     if (next.spread === spread && Math.abs(next.scale - scale) / scale < 0.05) return;
-    const n = currentPage || 1;
-    const line = viewer.scrollTop + viewer.clientHeight * 0.35;
-    const at = (line - pageDivs[n - 1].offsetTop) / pageDivs[n - 1].offsetHeight;
-    pinStop?.();
-    layout();
-    const div = pageDivs[n - 1];
-    viewer.scrollTop = div.offsetTop + at * div.offsetHeight - viewer.clientHeight * 0.35;
-    updatePage(); // 双页和单页互换时页码可能没变、也不一定触发滚动，眼前是一页还是两页要自己补
+    relayout();
   }, 250);
 }).observe(viewer);
 
+// ---------- 手动缩放：版心的 ＋ −、在书页上双指缩放（或按住 ⌘ 滚动） ----------
+// 缩放倍数就是字的大小：正文 10 磅的书按 1.6 倍画，字约 16px，和批注栏里讲解的字一样大。
+// 定了之后就按这个大小画，拖版心、缩窗口都不变；放得下两页时自动左右两页一排（fit）。点版心里的百分比回到自动
+const ZOOM_KEY = "banDu.zoom"; // 本机浏览器里：{ 书的 key: 缩放倍数 }
+const zoomMin = () => Math.max(0.25, 280 / base.width); // 一页至少画 280px 宽
+const zoomMax = () => Math.max(zoomMin(), Math.min(4, 2400 / base.width)); // 最多画 2400px 宽：再大一页画布就上百兆
+const clampZoom = (s) => Math.min(Math.max(s, zoomMin()), zoomMax());
+let zoomPending = null; // 正在调、还没重排的缩放：{ scale, x, y }，(x, y) 是缩放中心在阅读区里的位置
+let zoomTimer;
+
+function savedZoom(key) {
+  try {
+    const s = JSON.parse(localStorage.getItem(ZOOM_KEY) || "{}")[key];
+    return typeof s === "number" && s > 0 ? clampZoom(s) : null;
+  } catch { return null; }
+}
+function saveZoom(key, s) {
+  try {
+    const all = JSON.parse(localStorage.getItem(ZOOM_KEY) || "{}");
+    if (s) all[key] = s; else delete all[key];
+    localStorage.setItem(ZOOM_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+function renderZoom() {
+  const box = $("#zoom");
+  box.hidden = !pdf || viewer.hidden;
+  if (box.hidden) return;
+  const s = zoomPending?.scale ?? userScale ?? scale;
+  const val = $("#zoom-val");
+  val.textContent = Math.round(s * 100) + "%";
+  box.classList.toggle("manual", !!(zoomPending || userScale));
+  val.title = zoomPending || userScale ? "手动定的大小。点一下回到按宽度自动排" : "现在按阅读区宽度自动排。用 ＋ − 或在书页上双指缩放，可以把字调大调小";
+  $("#zoom-in").disabled = s >= zoomMax() - 0.001;
+  $("#zoom-out").disabled = s <= zoomMin() + 0.001;
+}
+
+// 先把阅读区按比例放大缩小看个大概（不重画），停手 200ms 后按新倍数重排、重画
+function zoomTo(next, x = viewer.clientWidth / 2, y = viewer.clientHeight * 0.35) {
+  if (!pdf || viewer.hidden) return;
+  next = clampZoom(next);
+  if (!zoomPending) zoomPending = { x, y };
+  zoomPending.scale = next;
+  pinStop?.();
+  viewer.style.transformOrigin = `${zoomPending.x}px ${zoomPending.y}px`;
+  viewer.style.transform = `scale(${next / scale})`;
+  renderZoom();
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(applyZoom, 200);
+}
+
+function applyZoom() {
+  const p = zoomPending;
+  zoomPending = null;
+  viewer.style.transform = "";
+  if (!p || !pdf) return;
+  userScale = p.scale;
+  saveZoom(fileKey, userScale);
+  relayout(p.y, p.x);
+}
+
+// 一格 10%，落在整 5% 上；步子小到取整后不动时至少走 5%
+function zoomStep(dir) {
+  const cur = zoomPending?.scale ?? scale;
+  let next = Math.round(cur * (dir > 0 ? 1.1 : 1 / 1.1) * 20) / 20;
+  if (Math.abs(next - cur) < 0.01) next = cur + dir * 0.05;
+  zoomTo(next);
+}
+
+$("#zoom-in").addEventListener("click", () => zoomStep(1));
+$("#zoom-out").addEventListener("click", () => zoomStep(-1));
+$("#zoom-val").addEventListener("click", () => {
+  if (!pdf || (!userScale && !zoomPending)) return;
+  clearTimeout(zoomTimer);
+  zoomPending = null;
+  viewer.style.transform = "";
+  userScale = null;
+  saveZoom(fileKey, null);
+  relayout();
+  toast("书页回到按宽度自动排");
+});
+
+// 触控板双指缩放在 Chrome 里是带 ctrlKey 的 wheel；鼠标按住 ⌘ 滚动也算。不拦的话 Chrome 会把整个窗口连批注栏一起放大
+viewer.addEventListener("wheel", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || !pdf) return;
+  e.preventDefault();
+  const box = viewer.getBoundingClientRect();
+  const dy = Math.max(-25, Math.min(25, e.deltaY)); // 鼠标滚一格 deltaY 是 100，按 25 算，一格约 28%
+  zoomTo((zoomPending?.scale ?? scale) * Math.exp(-dy * 0.01), e.clientX - box.left, e.clientY - box.top);
+}, { passive: false });
+
+// ---------- 按需渲染 ----------
+// 整页是一张大图的书（扫描版、《理解深度学习》这种每页一张 JPEG 2000 的），一页解码加绘制约 0.2 秒，pdf.js 的 worker 一次只做一件事。快速划过几十页时页页都排队去画，
+// 停下来要等前面几十页画完才轮到眼前这页（实测《理解深度学习》划过 30 页停下等 4 秒）。所以：
+// 进了预渲染范围（阅读区上下 800px）才排队，离阅读线近的先画，同时最多画两页；没画完就划出范围的，取消。
+// 画好的页离开阅读区上下各 2.5 屏就收掉画布和文字层，让 pdf.js 丢掉解码出来的图（不收的话看过一百多页，画布占 2GB）
+const MAX_DRAWING = 2;
+const OCR_SETTLE_MS = 300; // 扫描页画好后停多久没被划走，才送去识别
+const near = new Set(); // 在预渲染范围里的页
+const jobs = new Map(); // 页码 -> 在画的这一次 { cancelled, task, drawn }
+
 const lazy = new IntersectionObserver((entries) => {
   for (const e of entries) {
-    if (!e.isIntersecting) continue;
     const n = +e.target.dataset.page;
-    renderPage(n);
-    ocrFailed.get(n)?.(); // 上次识别失败的扫描页翻回来了：自动再试一次
+    if (pageDivs[n - 1] !== e.target) continue; // 换书前那本的页
+    if (e.isIntersecting) {
+      near.add(n);
+      ocrFailed.get(n)?.(); // 上次识别失败的扫描页翻回来了：自动再试一次
+    } else {
+      near.delete(n);
+      if (jobs.has(n)) drop(n); // 没画完就划走了：取消，回来再画
+    }
   }
+  schedule();
 }, { root: viewer, rootMargin: "800px 0px" });
 
+const keep = new IntersectionObserver((entries) => {
+  if (viewer.hidden) return; // 回书架时阅读区藏起来，所有页都算「离开」：不收，回来接着看
+  for (const e of entries) {
+    const n = +e.target.dataset.page;
+    if (!e.isIntersecting && pageDivs[n - 1] === e.target) drop(n);
+  }
+}, { root: viewer, rootMargin: "250% 0px" });
+
+// 预渲染范围里还没画的页，离阅读线最近的先画
+function schedule() {
+  if (!pdf || viewer.hidden) return;
+  const line = viewer.scrollTop + viewer.clientHeight * 0.35;
+  while ([...jobs.values()].filter((j) => !j.drawn).length < MAX_DRAWING) {
+    let best = 0, bestD = Infinity;
+    for (const n of near) {
+      if (rendering.has(n)) continue;
+      const div = pageDivs[n - 1];
+      const d = Math.abs(div.offsetTop + div.offsetHeight / 2 - line);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    if (!best) return;
+    renderPage(best);
+  }
+}
+
+// 收掉一页：在画的取消，画好的清空，页的宽高留着（滚动位置不动），下次进预渲染范围重新画。
+// 对照页只清原图块的像素，译文、文字层、页高都留着（它的高度随译文变，整个收了再画，上方的页一缩一涨，眼前的字会跳），
+// 翻回来整页重画一次再切回各块（refillCrops）。选区还压在这页上（正拖着选字、或划完留在页上还没双击）不收
+function drop(n) {
+  const div = pageDivs[n - 1];
+  if (!rendering.has(n)) return;
+  const sel = getSelection();
+  if (sel.rangeCount && !sel.isCollapsed && sel.getRangeAt(0).intersectsNode(div)) return;
+  const job = jobs.get(n);
+  if (job) { job.cancelled = true; job.task?.cancel(); jobs.delete(n); }
+  rendering.delete(n);
+  ocrFailed.delete(n);
+  for (const c of div.querySelectorAll("canvas")) c.width = c.height = 0; // 画布内存马上还，不等回收
+  if (!div.classList.contains("bilingual")) {
+    for (const tl of div.querySelectorAll(".textLayer")) textLayers.delete(tl); // 不然留到下次松开鼠标才清，纯滚动划过几百页就滞留几百页的文字树
+    div.replaceChildren();
+  }
+  pdf.getPage(n).then((p) => p.cleanup()).catch(() => {}); // pdf.js 丢掉这页解码出来的图；还有渲染在跑时它会等跑完再丢
+}
+
+// 立刻画第 n 页（不排队），返回画完的 Promise；已经在画或画好了就返回那一次的
 function renderPage(n) {
-  if (!rendering.has(n)) rendering.set(n, doRender(n));
+  if (!rendering.has(n)) {
+    const job = { cancelled: false, task: null, drawn: false };
+    jobs.set(n, job);
+    rendering.set(n, doRender(n, job).finally(() => {
+      if (jobs.get(n) === job) jobs.delete(n);
+      schedule();
+    }));
+  }
   return rendering.get(n);
 }
 
 // 渲染途中换了书：旧文档销毁后 pdf.js 会抛「渲染已取消」「传输已销毁」，这些都静默放掉
-async function doRender(n) {
+async function doRender(n, job) {
   const doc = pdf;
   if (!doc) return;
   try {
-    await renderInto(n, doc, layoutSeq);
+    await renderInto(n, doc, layoutSeq, job);
   } catch (e) {
     if (doc !== pdf || e?.name === "RenderingCancelledException" || /destroyed|aborted/i.test(e?.message || "")) return;
     throw e;
   }
 }
 
-async function renderInto(n, doc, seq) {
+async function renderInto(n, doc, seq, job) {
   const div = pageDivs[n - 1];
+  // 换了书、重排了（新一轮渲染会接手），或者这页已经划走收掉了
+  const stale = () => doc !== pdf || seq !== layoutSeq || job.cancelled;
   const page = await doc.getPage(n);
-  if (seq !== layoutSeq) return; // 等页的时候重排了：新一轮渲染会接手
+  if (stale()) return;
   const viewport = page.getViewport({ scale });
+  if (div.classList.contains("bilingual")) return refillCrops(page, viewport, div, job, stale);
   div.style.width = viewport.width + "px";
   div.style.height = viewport.height + "px";
 
   const textContent = await page.getTextContent();
-  if (doc !== pdf || seq !== layoutSeq) return; // 渲染途中换了书或重排了
+  if (stale()) return;
   pageText.set(n, textContent.items.map((it) => it.str + (it.hasEOL ? "\n" : "")).join(""));
 
   const dpr = window.devicePixelRatio || 1;
@@ -415,16 +620,25 @@ async function renderInto(n, doc, seq) {
   tl.className = "textLayer";
   div.appendChild(tl);
   await new pdfjsLib.TextLayer({ textContentSource: textContent, container: tl, viewport }).render();
+  if (stale()) return;
   numberSpans(tl);
   registerLayer(tl);
 
   drawHighlights(n);
-  await page.render({
+  job.task = page.render({
     canvasContext: canvas.getContext("2d"), viewport,
     transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
-  }).promise;
+  });
+  await job.task.promise;
+  job.drawn = true; // 画完了就让出名额：扫描页接着等识别，不占着
+  schedule();
+  if (stale()) return;
   if (!pageText.get(n).trim()) {
     scanned.add(n);
+    // 没识别过的扫描页先停一下：一划而过的页这时已经收掉，不送去识别。识别要另画一张高清图，
+    // 收掉的页解码出来的图已经丢了，得重新解码，快速划过一百页时 worker 被这些图堵住，眼前这页要等两秒多
+    if (!ocrLines.has(n)) await new Promise((r) => setTimeout(r, OCR_SETTLE_MS));
+    if (stale()) return;
     await ocrPage(n, page, div, tl, doc);
   }
   // 中英对照：按段落切成原图块，块下插译文。渲染途中换了书或重排过就不动
@@ -434,6 +648,23 @@ async function renderInto(n, doc, seq) {
       enqueue(n, restructure(div, plan, registerLayer));
       drawHighlights(n);
     }
+  }
+}
+
+// 收掉像素的对照页翻回来了：整页重画一次（不上屏），再切回各个原图块。译文、文字层、页高都还在，什么都不跳
+async function refillCrops(page, viewport, div, job, stale) {
+  const dpr = window.devicePixelRatio || 1;
+  const c = document.createElement("canvas");
+  c.width = Math.floor(viewport.width * dpr);
+  c.height = Math.floor(viewport.height * dpr);
+  try {
+    job.task = page.render({ canvasContext: c.getContext("2d"), viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null });
+    await job.task.promise;
+    job.drawn = true;
+    schedule();
+    if (!stale()) refill(div, c);
+  } finally {
+    c.width = c.height = 0;
   }
 }
 
@@ -460,7 +691,11 @@ function recognize(n, page, doc) {
 async function runOcr(n, page, doc) {
   const key = bookKeyOf.get(doc); // 翻页时 fileKey 可能已经是下一本书
   let res = await api(`/api/ocr?file=${encodeURIComponent(key)}&page=${n}`);
-  if (!res.lines) res = await api("/api/ocr", { file: key, page: n, dataUrl: await hiresJpeg(page) });
+  if (!res.lines) {
+    const dataUrl = await hiresJpeg(page);
+    if (!rendering.has(n)) page.cleanup(); // 导读、导图批量识别的远页：高清图出来就让 pdf.js 丢掉解码出的图（每页最多约 10MB），不留到换书
+    res = await api("/api/ocr", { file: key, page: n, dataUrl });
+  }
   if (doc !== pdf) return null;
   if (!res.lines) throw Object.assign(new Error(res.error || "未知原因"), { name: "OcrFailed" });
   const lines = readingOrder(res.lines);
@@ -492,7 +727,7 @@ async function ocrPage(n, page, div, tl, doc, quiet = false) {
     try {
       lines = await recognize(n, page, doc);
     } catch (err) {
-      if (doc === pdf) ocrFailure(n, page, div, tl, doc, err, quiet);
+      if (doc === pdf && tl.isConnected) ocrFailure(n, page, div, tl, doc, err, quiet); // 这页已经收掉的不提示，翻回来重画时会再识别
       return;
     } finally {
       badge.remove();
@@ -610,6 +845,7 @@ document.addEventListener("selectionchange", () => {
 
 // 从空白处起拖（行首左边、行与行之间）：浏览器在这里找不到起点，拖动只会移动光标、选不上字。
 // 把起点吸到最近一行文字上，这次拖选由我们接管；从字上起拖仍交给浏览器原生处理。
+// 鼠标按在字的上方 3px 以内时，Chrome 把目标也算成这行的字，但照样只拖光标（实测松手时选区是空的）：按下点不在字的盒子里就一并接管
 function nearestCaret(tl, x, y) {
   let best = null;
   let bestD = Infinity;
@@ -642,7 +878,11 @@ document.addEventListener("mousedown", (e) => {
 
 document.addEventListener("mousedown", (e) => {
   const tl = e.target.closest?.(".textLayer");
-  if (e.button !== 0 || !tl || (e.target !== tl && !e.target.classList.contains("endOfContent"))) return;
+  if (e.button !== 0 || e.detail >= 2 || !tl || selectionHit(e.clientX, e.clientY)) return; // 按在留着的选区上：下面的监听器接手
+  if (e.target !== tl && !e.target.classList.contains("endOfContent")) {
+    const r = e.target.getBoundingClientRect();
+    if (e.clientY >= r.top && e.clientY <= r.bottom) return; // 真按在字上
+  }
   const start = nearestCaret(tl, e.clientX, e.clientY);
   if (!start) return;
   e.preventDefault();
@@ -666,13 +906,7 @@ let pageTimer;
 function updatePage() {
   // 阅读区隐藏（回了书架）时所有页的 offsetTop 都是 0，二分会落到最后一页，进度被冲成末页
   if (!pdf || viewer.hidden) return;
-  const mid = viewer.scrollTop + viewer.clientHeight * 0.35;
-  let lo = 0, hi = pageDivs.length - 1;
-  while (lo < hi) {
-    const m = (lo + hi + 1) >> 1;
-    if (pageDivs[m].offsetTop <= mid) lo = m; else hi = m - 1;
-  }
-  while (lo > 0 && pageDivs[lo - 1].offsetTop === pageDivs[lo].offsetTop) lo--; // 双页时同一排算左页
+  const lo = rowAt(viewer.scrollTop + viewer.clientHeight * 0.35); // 双页时同一排算左页
   const n = lo + 1;
   const to = lo + 1 < pageDivs.length && pageDivs[lo + 1].offsetTop === pageDivs[lo].offsetTop ? n + 1 : n; // 双页时右页
   if (n === currentPage && to === currentTo) return;
@@ -743,6 +977,8 @@ function surfacesOf(div) {
   return div.classList.contains("bilingual") ? [...div.querySelectorAll(".crop-inner")] : [div];
 }
 
+const hlOf = new WeakMap(); // 页上画出来的划线块 -> 它是哪条划线
+
 function drawHighlights(n) {
   const div = pageDivs[n - 1];
   if (!div) return;
@@ -755,6 +991,7 @@ function drawHighlights(n) {
           const r = document.createElement("div");
           r.className = "hl" + (hl.kind ? " " + hl.kind : "") + (hl === currentHl ? " current" : "");
           Object.assign(r.style, { left: x * 100 + "%", top: y * 100 + "%", width: w * 100 + "%", height: h * 100 + "%" });
+          hlOf.set(r, hl);
           surface.appendChild(r);
         }
         // 旁线：当前这条划线右侧一道靛色竖线，标出老师正在讲的那句
@@ -810,11 +1047,34 @@ function mergeRects(rects) {
   return out.map((o) => ({ ...o, width: o.right - o.left, height: o.bottom - o.top }));
 }
 
-function onSelectionDone() {
-  const sel = window.getSelection();
+// 松开鼠标：书页外松手时把选区终点拉回最近的页。选区就留在页上（不记划线、Claude 也不换视线），
+// 点别处它就散掉；在它上面双击才出「划线」（选的是中文译文则是「问这句」），见 showSelectionMenu
+function settleSelection() {
+  const sel = getSelection();
+  if (!pdf || sel.rangeCount === 0 || sel.isCollapsed) { lastUp = null; return; }
+  clampFocus(sel);
+}
+
+// 选区里文字的矩形（视口坐标）：书页文字只量文字层；中文译文是普通排版，直接取
+function selectionRects(range) {
+  const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+  return startEl?.closest(".tr") ? [...range.getClientRects()] : textRects(range);
+}
+
+// 屏幕上 (x, y) 是不是压在书页上留着的选区里
+function selectionHit(x, y) {
+  const sel = getSelection();
+  if (!sel.rangeCount || sel.isCollapsed) return false;
+  const from = sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement;
+  if (!from?.closest("#viewer")) return false;
+  return selectionRects(sel.getRangeAt(0)).some((r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+}
+
+// 菜单里点了「划线」/「问这句」：把留在页上的选区记成划线（选的是中文译文则只让 Claude 看到这段和它的英文原文）
+function commitSelection() {
+  const sel = getSelection();
   const text = sel?.toString().trim();
   if (!pdf || !text || text.length < 2 || sel.rangeCount === 0) return;
-  if (clampFocus(sel)) return onSelectionDone();
   const range = sel.getRangeAt(0);
   const startDiv = pageOf(range.startContainer);
   if (!startDiv || !viewer.contains(startDiv)) return;
@@ -1011,16 +1271,38 @@ function lookAt(hl) {
   }, (err) => toast("没能让 Claude 看到这段：" + whyFailed(err, "再试一次"), undefined, 5000));
 }
 
-// 点一下已有的划线（不是拖选）：旁边出「问这句」「删除这条划线」
+// 书页旁的小菜单：双击留在页上的选区出「划线」（译文是「问这句」）；点一下已有的划线出「问这句」「删除这条划线」
 const hlMenu = el("div", { id: "hl-menu", hidden: true });
-let menuHl = null;
-const askBtn = el("button", { type: "button", textContent: "问这句", onclick: () => { const h = menuHl; hideHlMenu(); lookAt(h); } });
-hlMenu.append(askBtn, el("button", {
-  type: "button", textContent: "删除这条划线",
-  onclick: () => { const h = menuHl; hideHlMenu(); removeHighlight(h); },
-}));
+hlMenu.addEventListener("mousedown", (e) => e.preventDefault()); // 点菜单不能把页上的选区点散、也不抢焦点
 document.body.append(hlMenu);
-function hideHlMenu() { hlMenu.hidden = true; menuHl = null; }
+function openMenu(x, y, buttons) {
+  hlMenu.replaceChildren(...buttons);
+  hlMenu.hidden = false;
+  hlMenu.style.left = Math.min(x, window.innerWidth - 150) + "px";
+  hlMenu.style.top = Math.min(y + 14, window.innerHeight - 84) + "px";
+}
+function hideHlMenu() { hlMenu.hidden = true; }
+const menuBtn = (textContent, run) => el("button", { type: "button", textContent, onclick: () => { hideHlMenu(); run(); } });
+
+function showSelectionMenu(x, y) {
+  const range = getSelection().getRangeAt(0);
+  const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+  openMenu(x, y, [menuBtn(startEl?.closest(".tr") ? "问这句" : "划线", commitSelection)]);
+}
+
+// 在留着的选区上按下鼠标：不让浏览器把它点散、双击时也不让它改选成一个词，双击才能落在这个选区上出菜单。
+// 点在选区外面照旧：选区散掉，从那里重新选
+document.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 || !pdf || !selectionHit(e.clientX, e.clientY)) return;
+  e.preventDefault();
+}, true);
+document.addEventListener("dblclick", (e) => {
+  if (e.button !== 0 || !pdf || !selectionHit(e.clientX, e.clientY)) return;
+  e.preventDefault();
+  if (getSelection().toString().trim().length < 2) return; // 只选中一个字不算划线（commitSelection 也不收）
+  showSelectionMenu(e.clientX, e.clientY);
+});
+
 document.addEventListener("click", (e) => {
   if (e.target.closest?.("#hl-menu")) return;
   hideHlMenu();
@@ -1033,13 +1315,19 @@ document.addEventListener("click", (e) => {
   const hl = [...highlights].reverse().find((h) => h.parts?.some((p) => p.page === hit.page
     && p.rects.some(([x, y, w, hh]) => fx >= x - pad && fx <= x + w + pad && fy >= y - pad && fy <= y + hh + pad)));
   if (!hl) return;
-  menuHl = hl;
-  askBtn.style.display = hl.kind ? "none" : ""; // 框选区域的上下文（区域图、框内文字）没存在划线里，没法重新交给 Claude
-  hlMenu.hidden = false;
-  hlMenu.style.left = Math.min(e.clientX, window.innerWidth - 150) + "px";
-  hlMenu.style.top = Math.min(e.clientY + 14, window.innerHeight - 84) + "px";
+  openMenu(e.clientX, e.clientY, [
+    ...(hl.kind ? [] : [menuBtn("问这句", () => lookAt(hl))]), // 框选区域的上下文（区域图、框内文字）没存在划线里，没法重新交给 Claude
+    menuBtn("删除这条划线", () => removeHighlight(hl)),
+  ]);
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideHlMenu(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  hideHlMenu();
+  if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return; // 输入框里的 Esc 是收预测、收「/」菜单
+  const sel = getSelection(); // 页上留着的选区也散掉
+  const from = sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement;
+  if (from?.closest("#viewer")) sel.removeAllRanges();
+});
 viewer.addEventListener("scroll", hideHlMenu, { passive: true });
 
 // ---------- 给功能模块用的接口（框选、导读、导图） ----------
@@ -1197,24 +1485,56 @@ export async function revealPassage(page, quote) {
   // 命中的片段：从头一个到最后一个之间的都算（连字单独成片、被抹平成空的片段也跟着一起闪）
   const owned = map.slice(at, at + len).map((i) => owners[i]);
   const hit = spans.slice(spans.indexOf(owned[0]), spans.indexOf(owned.at(-1)) + 1);
-  const first = hit[0].getBoundingClientRect();
-  viewer.scrollTop += first.top - viewer.getBoundingClientRect().top - viewer.clientHeight * 0.35;
-  pinLine(hit[0]);
   // 旁线位置按页内比例记下来，重排、开关对照之后还能画回去
   const surface = hit[0].closest(".crop-inner") || div;
   const box = surface.getBoundingClientRect();
   const rs = hit.map((sp) => sp.getBoundingClientRect());
   const x0 = Math.min(...rs.map((r) => r.left)), x1 = Math.max(...rs.map((r) => r.right));
   const y0 = Math.min(...rs.map((r) => r.top)), y1 = Math.max(...rs.map((r) => r.bottom));
-  const mark = { page, rect: [(x0 - box.left) / box.width, (y0 - box.top) / box.height, (x1 - x0) / box.width, (y1 - y0) / box.height] };
+  land(page, hit, [(x0 - box.left) / box.width, (y0 - box.top) / box.height, (x1 - x0) / box.width, (y1 - y0) / box.height]);
+  return true;
+}
+
+// 跳到一处之后的落点：els[0] 所在的行停在阅读区 35% 高处，els 闪 1.8 秒，闪完在页边留旁线（rect 是页内比例坐标）
+function land(page, els, rect) {
+  viewer.scrollTop += els[0].getBoundingClientRect().top - viewer.getBoundingClientRect().top - viewer.clientHeight * 0.35;
+  pinLine(els[0]);
   const seq = revealSeq;
-  hit.forEach((sp) => sp.classList.add("flash"));
+  els.forEach((e) => e.classList.add("flash"));
   setTimeout(() => {
-    hit.forEach((sp) => sp.classList.remove("flash"));
+    els.forEach((e) => e.classList.remove("flash"));
     if (seq !== revealSeq) return;
-    revealMark = mark;
+    revealMark = { page, rect };
     drawHighlights(page);
   }, 1800);
+}
+
+// 跳到一条划线（对话栏里点一组问答上面的划线原文）：按划线记下的位置找，落点和跳原文一样。
+// 划线已经删了、或是导读里「接着问」的那段（不是划线），就按原文去页上找。q = { text, page, hl? }。
+// 定位到了返回 true；找不到时停在那一页页顶，返回 false
+export async function revealHighlight(q) {
+  if (!pdf) return false;
+  const hl = (q.hl && highlights.find((h) => h.id === q.hl))
+    || [...highlights].reverse().find((h) => h.page === q.page && h.text === q.text);
+  const part = hl?.parts?.find((p) => p.rects?.length && pageDivs[p.page - 1]);
+  if (!part) return revealPassage(q.page, q.text);
+  const page = part.page;
+  if (!back && page !== currentPage) setBack({ page: currentPage, scroll: viewer.scrollTop });
+  gotoPage(page);
+  await renderPage(page).catch(() => {});
+  clearReveal(); // 先擦掉上一次的旁线：它在这一页时会把整页划线重画一遍，先取的划线块就脱离页面了
+  // 中英对照时一页切成好几块，每块里都画着整页的划线、只露出自己那一截：只要露在外面的那几块
+  const shown = (e) => {
+    const crop = e.closest(".crop");
+    if (!crop) return true;
+    const a = e.getBoundingClientRect(), b = crop.getBoundingClientRect();
+    return a.bottom > b.top && a.top < b.bottom;
+  };
+  const els = [...pageDivs[page - 1].querySelectorAll(".hl")].filter((e) => hlOf.get(e) === hl && shown(e));
+  if (!els.length) return revealPassage(q.page, q.text);
+  const x0 = Math.min(...part.rects.map(([x]) => x)), x1 = Math.max(...part.rects.map(([x, , w]) => x + w));
+  const y0 = Math.min(...part.rects.map(([, y]) => y)), y1 = Math.max(...part.rects.map(([, y, , h]) => y + h));
+  land(page, els, [x0, y0, x1 - x0, y1 - y0]);
   return true;
 }
 
@@ -1286,6 +1606,5 @@ export async function focusPassage(page, text) {
   renderSees();
 }
 
-// 挂在 document 上：拖选时鼠标松在阅读区外也算；选的是对话栏里的字则不处理（onSelectionDone 里判断）
-document.addEventListener("mouseup", (e) => { lastUp = { x: e.clientX, y: e.clientY }; setTimeout(onSelectionDone, 0); });
-document.addEventListener("keyup", (e) => { if (e.shiftKey) onSelectionDone(); });
+// 挂在 document 上：拖选时鼠标松在阅读区外也算；选的是对话栏里的字不动它（clampFocus 里判断）
+document.addEventListener("mouseup", (e) => { lastUp = { x: e.clientX, y: e.clientY }; setTimeout(settleSelection, 0); });

@@ -264,6 +264,17 @@ export function restructure(div, plan, onTextLayer) {
   return jobs;
 }
 
+// 收掉像素的对照页翻回来了：按每块记在样式里的位置和大小，从整页重画的 src 再切一次（和上面切块的算法一样）
+export function refill(div, src) {
+  const k = src.width / div.clientWidth;
+  for (const canvas of div.querySelectorAll(".crop-inner > canvas")) {
+    const [cx, cy, cw, ch] = ["left", "top", "width", "height"].map((p) => parseFloat(canvas.style[p]));
+    canvas.width = Math.max(1, Math.round(cw * k));
+    canvas.height = Math.max(1, Math.round(ch * k));
+    canvas.getContext("2d").drawImage(src, cx * k, cy * k, cw * k, ch * k, 0, 0, canvas.width, canvas.height);
+  }
+}
+
 // ---------- 6. 翻译队列：离当前页近的先译，最多同时两页 ----------
 const pending = new Map(); // 页码 -> 段落任务
 let running = 0;
