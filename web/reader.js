@@ -148,13 +148,19 @@ function renderFolio() {
 }
 
 // 书架用的封面：第 1 页渲染成小图
+// 书架封面：第 1 页渲染成小图。ink 是非白像素占比：0 是整页没画出来（比如 JPEG 2000 还没解出来），
+// 百分之几是只有一行标题的报告首页，真封面和满页文字的文献在 15% 以上
 export async function renderCover(width = 240) {
   if (!pdf) return null;
   const page = await pdf.getPage(1);
   const vp = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });
   const c = Object.assign(document.createElement("canvas"), { width: Math.floor(vp.width), height: Math.floor(vp.height) });
-  await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
-  return c.toDataURL("image/jpeg", 0.82);
+  const g = c.getContext("2d", { willReadFrequently: true });
+  await page.render({ canvasContext: g, viewport: vp }).promise;
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  let dark = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] < 235 || d[i + 1] < 235 || d[i + 2] < 235) dark++;
+  return { cover: c.toDataURL("image/jpeg", 0.82), ink: dark / (d.length / 4) };
 }
 
 // 小文件整本读；大文件（几百 MB 的参考书）按 pdf.js 要的区间从磁盘切片读

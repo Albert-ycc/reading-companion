@@ -1,6 +1,6 @@
 // 书架：书库文件夹（Chrome 授权一次，记住访问权）→ 扫出 PDF 清单 → 搜索 / 最近在读 → 交给阅读器
 import { idb } from "./db.js";
-import { openBook, renderCover } from "./reader.js";
+import { openBook, renderCover, tidyText } from "./reader.js";
 import { $, toast, api, el, setSpineTitle } from "./ui.js";
 
 let indexCache = []; // [{rootId, rootName, name, path}]
@@ -29,6 +29,17 @@ async function ensurePermission(handle) {
 }
 
 const titleOf = (name) => name.replace(/\.pdf$/i, "");
+const COVER_V = 2; // 封面算法的版本号：存下来的封面带这个号才算有效，改了算法就加一
+// 书架上显示的书名：Anna's Archive 那种「书名 -- 作者 -- 出版社」的文件名只留书名，下划线当空格
+export const tidyTitle = (t) => t.split(" -- ")[0].replace(/_+/g, " ").replace(/\s+/g, " ").trim();
+const cjkRatio = (t) => (t.match(/[\u3400-\u9fff\uff00-\uffef\u3000-\u303f]/g) || []).length / Math.max(1, t.replace(/\s/g, "").length);
+// 题签封面：第一页是白纸的报告、文献，或封面还没渲染出来的书——靛布面、纸色题签写书名，中文竖排、西文横排
+function genCover(title, numPages) {
+  const t = tidyTitle(title);
+  return el("span", { className: "gen" },
+    el("span", { className: "tag " + (cjkRatio(t) >= 0.6 ? "v" : "h"), textContent: t }),
+    numPages ? el("span", { className: "n", textContent: `${numPages} 页` }) : "");
+}
 
 // ---------- 打开一本书 ----------
 const RESTART = "launchctl kickstart -k gui/$(id -u)/com.albert.reading-companion";
@@ -58,12 +69,18 @@ export async function openHandle(handle, key, title) {
     if ((await openBook(file, key, title)) === false) return;
     // 打开成功才记进「最近在读」：坏文件进去会把真书挤出只放 12 本的书架
     const old = await idb.get("books", key);
-    const record = { key, title, handle, at: Date.now(), cover: old?.cover };
+    const record = { key, title, handle, at: Date.now(), cover: old?.cover, blank: old?.blank, coverV: old?.coverV };
     await idb.put("books", key, record);
-    // 书架上的封面：第一次打开时把第 1 页渲染成小图存下来
-    if (!record.cover) {
-      record.cover = await renderCover().catch(() => null);
-      if (record.cover) await idb.put("books", key, record);
+    // 书架上的封面：把第 1 页渲染成小图存下来。没打过 COVER_V 的重渲一次：早期版本存过整页空白的坏封面
+    if (record.coverV !== COVER_V) {
+      const r = await renderCover().catch(() => null);
+      // 一片白是没画出来（比如 JPEG 2000 还没解出来），这次不记，下次打开再试；中途被从书架移除了就不再写回
+      if (r && r.ink > 0 && (await idb.get("books", key))) {
+        record.blank = r.ink < 0.06; // 第一页只有一两行字的报告：书架上用题签封面
+        record.cover = record.blank ? null : r.cover;
+        record.coverV = COVER_V;
+        await idb.put("books", key, record);
+      }
     }
   } catch (err) {
     showLibrary();
@@ -180,6 +197,73 @@ async function renderRoots() {
 }
 
 // ---------- 最近在读 ----------
+const fmtDate = (iso) => {
+  const d = new Date(iso), now = new Date();
+  if (isNaN(d)) return "";
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 864e5);
+  if (days === 0) return `今天 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (days === 1) return "昨天";
+  return (d.getFullYear() === now.getFullYear() ? "" : `${d.getFullYear()}年`) + `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+// 书口厚度＝真实页数（0.6×√页数，3–20px），藤黄细线＝读到的位置
+const edgeOf = (p) => p?.numPages ? Math.min(20, Math.max(3, 0.6 * Math.sqrt(p.numPages))) : 4;
+const pctOf = (p) => p?.numPages ? Math.min(100, (p.page / p.numPages) * 100) : 0;
+
+// 书的实体：封面 + 书口
+function bookObj(b, p) {
+  const face = b.cover ? el("img", { src: b.cover, alt: "" }) : genCover(b.title, p?.numPages);
+  return el("div", { className: "obj" }, face, el("span", { className: "edge" }, el("i")));
+}
+
+// 「从最近在读移除」：书架上的书和书桌上那本共用
+function removeBtn(b) {
+  return el("button", {
+    className: "rm", textContent: "×", title: "从最近在读移除",
+    onclick: async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await idb.del("books", b.key);
+      renderRecent();
+      toast("已从最近在读移除", {
+        label: "撤销",
+        // 撤销前又打开过这本书，就是已经有更新的记录了，不覆盖
+        run: async () => { if (!(await idb.get("books", b.key))) await idb.put("books", b.key, b); renderRecent(); },
+      });
+    },
+  });
+}
+
+// 书桌：最近打开的那本摊在书架上面——大封面、读到哪、最近划的一句（没划过线就是正读的那段）、「接着读」
+async function renderDesk(b, p, down) {
+  const desk = $("#desk");
+  desk.hidden = !b;
+  if (!b) return;
+  const info = down ? null : await api("/api/desk?file=" + encodeURIComponent(b.key)).catch(() => null);
+  const open = (e) => { e.preventDefault(); openHandle(b.handle, b.key, b.title); };
+  const quote = info?.last
+    ? [el("p", { className: "ql", textContent: info.last.page ? `最近划的一句 · 第 ${info.last.page} 页` : "最近划的一句" }),
+       el("p", { className: "q marked" }, el("mark", { textContent: tidyText(info.last.text) }))]
+    : info?.excerpt
+      ? [el("p", { className: "ql", textContent: `读到这里 · 第 ${info.excerpt.page} 页` }), el("p", { className: "q page", textContent: info.excerpt.text + "…" })]
+      : [];
+  const meta = p ? [`读到第 ${p.page} 页`, `共 ${p.numPages ?? "?"} 页`, fmtDate(p.at)].filter(Boolean).join(" · ") : down ? "—" : "还没开始读";
+  const book = el("a", { className: "book", href: "#", title: b.title, onclick: open }, bookObj(b, p));
+  book.style.setProperty("--e", edgeOf(p) + "px");
+  desk.replaceChildren(book,
+    el("div", { className: "info" },
+      el("p", { className: "k", textContent: "正在读" }),
+      el("h2", {}, el("a", { href: "#", textContent: tidyTitle(b.title), onclick: open })),
+      el("p", { className: "m", textContent: meta }),
+      el("div", { className: "bar" }, el("i")),
+      ...quote,
+      el("div", { className: "acts" },
+        el("button", { className: "btn solid", textContent: p ? `接着读第 ${p.page} 页` : "打开", onclick: open }),
+        info ? el("span", { className: "st", textContent: `划线 ${info.highlights} · 提问 ${info.questions}` }) : "")),
+    removeBtn(b));
+  desk.style.setProperty("--p", pctOf(p) + "%");
+}
+
 async function renderRecent() {
   const books = (await idb.all("books")).sort((a, b) => b.at - a.at).slice(0, 12);
   let progress = {};
@@ -191,36 +275,21 @@ async function renderRecent() {
     down = err.name === "ServiceDown";
     if (down) serviceDownToast();
   }
-  $("#recent").replaceChildren(...books.map((b) => {
+  const [now, ...rest] = books;
+  await renderDesk(now, now ? progress[now.key] : null, down);
+  // 书桌上那本不再摆在架上；只有一本时整个「最近在读」收起
+  $("#recent-head").hidden = $("#recent").hidden = books.length === 1;
+  $("#recent").replaceChildren(...rest.map((b) => {
     const p = progress[b.key];
-    const pct = p?.numPages ? Math.min(100, (p.page / p.numPages) * 100) : 0;
-    // 书口厚度＝真实页数（0.6×√页数，3–20px），藤黄细线＝读到的位置
-    const edge = p?.numPages ? Math.min(20, Math.max(3, 0.6 * Math.sqrt(p.numPages))) : 4;
     const open = (e) => { e.preventDefault(); openHandle(b.handle, b.key, b.title); };
-    const face = b.cover
-      ? el("img", { src: b.cover, alt: "" })
-      : el("span", { className: "plain", textContent: b.title });
     const book = el("a", { className: "book", href: "#", title: b.title + (p ? `　${p.page} / ${p.numPages} 页` : ""), onclick: open },
-      el("div", { className: "obj" }, face, el("span", { className: "edge" }, el("i"))),
-      el("p", { className: "t", textContent: b.title }),
+      bookObj(b, p),
+      el("p", { className: "t", textContent: tidyTitle(b.title) }),
       el("div", { className: "bar" }, el("i")),
       el("p", { className: "n" }, p ? `${p.page} / ${p.numPages ?? "?"}` : down ? "—" : "未读", el("small", { textContent: p ? "页" : "" })),
-      el("button", {
-        className: "rm", textContent: "×", title: "从最近在读移除",
-        onclick: async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          await idb.del("books", b.key);
-          renderRecent();
-          toast("已从最近在读移除", {
-            label: "撤销",
-            // 撤销前又打开过这本书，就是已经有更新的记录了，不覆盖
-            run: async () => { if (!(await idb.get("books", b.key))) await idb.put("books", b.key, b); renderRecent(); },
-          });
-        },
-      }));
-    book.style.setProperty("--e", edge + "px");
-    book.style.setProperty("--p", pct + "%");
+      removeBtn(b));
+    book.style.setProperty("--e", edgeOf(p) + "px");
+    book.style.setProperty("--p", pctOf(p) + "%");
     return book;
   }));
   if (!books.length) $("#recent").append(el("p", { className: "muted", textContent: "打开过的书会摆在这里。" }));

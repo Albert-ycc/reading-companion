@@ -484,6 +484,25 @@ class Handler(SimpleHTTPRequestHandler):
                 "page": read_json(PROGRESS, {}).get(key, {}).get("page", 1),
                 "highlights": read_json(HIGHLIGHTS, {}).get(key, []),
             })
+        if url.path == "/api/desk":
+            # 书架上「正在读」那本的卡片：划线数、提问数（含收进历史的）、最近划的一句，
+            # 以及阅读器里正开着这本时当前页的开头（没划过线的书，卡片上显示「读到这里」）
+            hls = [h for h in read_json(HIGHLIGHTS, {}).get(key, []) if isinstance(h, dict)]
+            last = max((h for h in hls if h.get("text")), key=lambda h: h.get("at") or "", default=None)
+            asked = sum(1 for c in read_json(archive_path(key), []) if isinstance(c, dict)
+                        for m in c.get("messages", []) if m.get("role") == "user")
+            asked += sum(1 for m in read_json(CHATS, {}).get(key, {}).get("messages", []) if m.get("role") == "user")
+            cur = read_json(STATE, {})
+            excerpt = None
+            if cur.get("file") == key and cur.get("pageText"):
+                text = re.sub(r"\s+", " ", re.sub(r"【第 \d+ 页】", " ", cur["pageText"])).strip()
+                if text:
+                    excerpt = {"text": text[:200], "page": cur.get("page")}
+            return self._send_json({
+                "highlights": len(hls), "questions": asked,
+                "last": {"text": last["text"], "page": last.get("page"), "at": last.get("at")} if last else None,
+                "excerpt": excerpt,
+            })
         if url.path == "/api/chat":
             # messages 是当前这段对话；asked 是这本书问过的全部问题（含收进历史的），导读找「你问过的」用；
             # inflight 是这本书正在跑的提问（页面刷新后据此接回），没有就是 null
