@@ -1,0 +1,86 @@
+/* 多文献对比表：书架上「对比几份文献」一节。全部规则收在 #compare 里（CSS 嵌套），不碰别的模块的类名；
+   标题行、按钮、目录式清单沿用书架已有的 .sec-row / .sec / .btn / .toc。 */
+#compare {
+  .cmp-intro { margin: 10px 0 0; }
+
+  /* 书单：两列，一行一本，勾选框 + 书名 */
+  .cmp-books { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 0 32px; border-top: 1px solid var(--rule); }
+  .cmp-books > .muted { grid-column: 1 / -1; margin: 12px 0; }
+  .cmp-book { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 46px; padding: 6px 6px; cursor: pointer;
+    border-bottom: 1px solid var(--rule-soft); transition: background .15s; }
+  .cmp-book:hover { background: var(--paper-deep); }
+  .cmp-book input { flex: none; width: 15px; height: 15px; margin: 0; accent-color: var(--dian); cursor: inherit; }
+  .cmp-book .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 15px/1.4 var(--song); color: var(--ink); }
+  .cmp-book .d { flex: none; max-width: 28%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12.5px/1 var(--song); color: var(--ink-3); }
+  .cmp-book:has(input:checked) .t { color: var(--dian); }
+  .cmp-book.off { cursor: default; opacity: .5; }
+  .cmp-book.off:hover { background: none; }
+
+  /* 维度一行 + 生成 */
+  .cmp-form { margin-top: 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .cmp-form label { flex: none; font: 400 14px/1 var(--song); color: var(--ink-2); }
+  .cmp-form input { flex: 1 1 200px; min-width: 0; height: 44px; padding: 0 14px; border: 1px solid var(--rule); border-radius: 4px;
+    background: var(--paper-hi); font: 400 15px/1 var(--song); color: var(--ink); }
+  .cmp-form input:focus { outline: 0; border-color: var(--dian); }
+  .cmp-form input:disabled { color: var(--ink-3); }
+  .cmp-form .btn { flex: none; height: 44px; padding: 0 18px; letter-spacing: .04em; }
+  .cmp-hint { margin: 8px 0 0; font: 400 13px/1.5 var(--song); color: var(--ink-3); }
+  .cmp-hint.err { color: var(--danger); }
+
+  /* 进度 */
+  .cmp-status { margin: 16px 0 0; display: flex; align-items: baseline; gap: 10px; font: 400 14px/1.6 var(--song); color: var(--ink-2); overflow-wrap: anywhere; }
+  .cmp-status .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); transform: translateY(-1px); }
+  .cmp-status.run .dot { background: var(--tenghuang); animation: cmp-pulse 1.4s ease-in-out infinite; }
+  .cmp-status.err { color: var(--danger); }
+  .cmp-status.err .dot { background: var(--danger); }
+  @keyframes cmp-pulse { 50% { opacity: .35; } }
+
+  /* 表 */
+  .cmp-result { margin-top: 30px; }
+  .cmp-cap { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .cmp-cap .t { font: 400 13px/1.5 var(--song); color: var(--ink-3); }
+  .cmp-wrap { margin-top: 12px; overflow-x: auto; border-top: 1px solid var(--ink-3); border-bottom: 1px solid var(--rule); background: var(--paper-hi); }
+  .cmp-wrap:focus-visible { outline: 1px solid var(--dian); outline-offset: 2px; }
+  .cmp-wrap table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+  /* 四五列放不下就横向滚：每列至少 250px */
+  .cmp-wrap:is(.n4, .n5) table { min-width: calc(120px + var(--n) * 250px); }
+  .cmp-wrap th, .cmp-wrap td { padding: 14px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule-soft); }
+  .cmp-wrap tr:last-child > * { border-bottom: 0; }
+  .cmp-wrap th + th, .cmp-wrap th + td, .cmp-wrap td + td { border-left: 1px solid var(--rule-soft); }
+  .cmp-wrap .dim { width: 120px; position: sticky; left: 0; z-index: 1; background: var(--paper-hi); box-shadow: 1px 0 0 var(--rule-soft); }
+  .cmp-wrap tbody .dim { font: 600 14px/1.6 var(--song); letter-spacing: .04em; color: var(--dian); overflow-wrap: anywhere; }
+  .cmp-wrap thead th { background: var(--paper-deep); border-bottom: 1px solid var(--rule); font-weight: 400; }
+  .cmp-wrap thead .dim { background: var(--paper-deep); }
+  .cmp-wrap .ttl { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; text-align: left;
+    font: 600 14.5px/1.5 var(--song); color: var(--ink); }
+  .cmp-wrap .ttl:hover { color: var(--dian); }
+  .cmp-wrap thead small { display: block; margin-top: 6px; font: 400 12px/1.5 var(--song); color: var(--ink-3); }
+  .cmp-wrap thead small.err { color: var(--danger); }
+
+  .cmp-wrap td { font: 400 14.5px/1.75 var(--song); color: var(--ink); overflow-wrap: anywhere; }
+  .cmp-wrap td .tx { display: block; }
+  .cmp-wrap td.none { color: var(--ink-3); }
+  .cmp-wrap td.empty { color: var(--rule); }
+  .cmp-wrap .pg { display: inline-block; margin-top: 8px; padding: 4px 7px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
+    font: 400 12px/1 var(--latin); color: var(--dian); transition: border-color .15s, background .15s, color .15s; }
+  .cmp-wrap .pg:hover { border-color: var(--dian); background: var(--dian); color: var(--paper); }
+  .cmp-wrap .nosrc { display: inline-block; margin-top: 8px; font: 400 12px/1.2 var(--song); color: var(--ink-3); border-bottom: 1px dotted var(--ink-3); cursor: help; }
+
+  .cmp-notes { list-style: none; margin: 12px 0 0; padding: 0; font: 400 13px/1.7 var(--song); color: var(--ink-3); }
+
+  /* 已生成的表 */
+  .cmp-saved { margin-top: 36px; }
+  .cmp-sub { margin: 0; display: flex; align-items: baseline; gap: 14px; font: 400 13px/1 var(--song); letter-spacing: .08em; color: var(--ink-3); }
+  .cmp-sub .more { font: 400 13px/1 var(--song); letter-spacing: 0; color: var(--ink-3); text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .cmp-sub .more:hover { color: var(--dian); }
+  .cmp-saved .toc { margin-top: 10px; }
+  .cmp-saved .toc li.on .name { color: var(--dian); }
+  .cmp-saved { container-type: inline-size; }
+  @container (max-width: 520px) { .toc li { flex-wrap: wrap; row-gap: 0; } .toc .leader { display: none; } }
+  .cmp-saved .toc .what { flex: 0 1 auto; min-width: 0; max-width: 100%; display: flex; flex-direction: column; gap: 2px; }
+  .cmp-saved .toc .dm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 12.5px/1.4 var(--song); color: var(--ink-3); }
+  .cmp-saved .toc .meta { flex: none; font: 400 13px/1.4 var(--song); color: var(--ink-3); white-space: nowrap; }
+  .cmp-saved .toc .acts { flex: none; }
+  .cmp-saved .toc .acts button { white-space: nowrap; }
+  .cmp-saved .toc .acts button.arm { color: var(--danger); }
+}

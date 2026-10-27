@@ -1,0 +1,41 @@
+/* 读到哪回顾到哪：问答视图顶上的回顾卡（web/recap.js）。规则全收在 #recap-card 里，不碰别的模块的类名（region.css 里有一批全局 .rc-*，所以这里用 rcp-）。
+   高度由 recap.js 的 fit() 按 #view-chat 剩下的高度算（max-height），这里的 50% 只是脚本没量出来之前的兜底。
+   「接着读」「展开 / 收起」在头一行，正文（.rcp-body）自己滚动，卡再矮也点得到。 */
+#recap-card {
+  flex: none; display: flex; flex-direction: column; margin: 14px 0 0; padding: 10px 14px 10px 16px; max-height: 50%; overflow: hidden;
+  border: 1px solid var(--rule); border-left: 3px solid var(--tenghuang); border-radius: 3px; background: var(--paper-hi);
+  font: 400 14px/1.7 var(--song); color: var(--ink);
+
+  .rcp-head, .rcp-wait, .rcp-err { flex: none; }
+  .rcp-body { flex: 1; min-height: 0; overflow: auto; }
+  &.line .rcp-body { display: none; }
+  &.noroom .rcp-fold { display: none; }
+
+  .rcp-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+  .rcp-tag { font: 400 12px/1 var(--song); padding: 2px 3px 1px; border: 1px solid var(--dian); border-radius: 2px; color: var(--dian); flex: none; }
+  .rcp-title { font: 600 14.5px/1.5 var(--song); color: var(--ink); }
+  .rcp-sub { font: 400 13px/1.5 var(--song); color: var(--ink-3); }
+  .rcp-acts { display: flex; align-items: center; gap: 12px; margin-left: auto; flex: none; }
+
+  .rcp-wait { display: flex; align-items: center; gap: 9px; margin: 6px 0 2px; font: 400 14px/1.7 var(--song); color: var(--ink-2); }
+  .rcp-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang); animation: rcp-pulse 1.4s ease-in-out infinite; flex: none; }
+  @media (prefers-reduced-motion: reduce) { .rcp-dot { animation: none; } }
+  .rcp-err { margin: 6px 0 2px; font: 400 14px/1.7 var(--song); color: var(--danger); }
+
+  .rcp-sum { margin: 8px 0 0; font: 400 15.5px/1.8 var(--kai); color: var(--dian-ink); overflow-wrap: anywhere; }
+  .rcp-basis { margin: 6px 0 0; font: 400 12.5px/1.6 var(--song); color: var(--ink-3); }
+  .rcp-blk { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule-soft); }
+  .rcp-blk h4 { margin: 0 0 2px; font: 600 12.5px/1.6 var(--song); letter-spacing: .04em; color: var(--ink-3); }
+  .rcp-list { margin: 0; padding: 0; list-style: none; }
+  .rcp-list li { padding: 2px 0; font: 400 13.5px/1.6 var(--song); color: var(--ink-2); overflow-wrap: anywhere; }
+
+  /* 「第 N 页」：点了跳过去，是正文里的页边小注，不是按钮的样子 */
+  .rcp-pg { font: 400 12.5px/1 var(--latin); color: var(--dian); text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); padding: 0 1px; }
+  .rcp-pg:hover { text-decoration-color: var(--dian); }
+  .rcp-lnk { font: 400 13px/1.5 var(--song); color: var(--dian); text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); white-space: nowrap; }
+  .rcp-lnk:hover { text-decoration-color: var(--dian); }
+  .rcp-go { font: 400 13px/1 var(--song); padding: 6px 12px; border-radius: 3px; border: 1px solid var(--dian); background: var(--dian); color: var(--paper); transition: background .15s; white-space: nowrap; }
+  .rcp-go:hover { background: var(--dian-ink); }
+}
+
+@keyframes rcp-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }

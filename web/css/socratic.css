@@ -1,0 +1,6 @@
+/* 反问模式开关：和「历史」「新对话」同一个 .ghost 按钮，开着时底边一道藤黄，和标签页的当前项同一个标法 */
+#chat-socratic { position: relative; }
+#chat-socratic[aria-checked="true"] { color: var(--ink); border-color: var(--ink-3); }
+#chat-socratic[aria-checked="true"]::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 3px;
+  border-radius: 2px; background: var(--tenghuang); }
+#chat-socratic:focus-visible { outline: 2px solid var(--dian); outline-offset: 2px; }

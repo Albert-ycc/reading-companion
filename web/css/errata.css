@@ -1,0 +1,46 @@
+/* 勘误本：批注视图里的「勘误」一节，和有勘误的书页右上角的小标。设计见 design/errata/。
+   列表规则收在 .errata-sec 里；小标的类名都带 er- 前缀。 */
+.errata-sec {
+  .er-empty { margin: 0; font: 400 14px/1.7 var(--song); color: var(--ink-3); }
+  .er-list { list-style: none; margin: 0; padding: 0; }
+  .er-item { padding: 12px 0 12px 10px; border-top: 1px solid var(--rule-soft); border-left: 2px solid transparent; margin-left: -10px; }
+  .er-item:first-child { border-top: 0; padding-top: 4px; }
+  .er-item.er-hit { animation: er-hit 1.9s ease-out; }
+
+  .er-head { display: flex; align-items: baseline; gap: 8px; }
+  .er-pg { padding: 0; font: 600 14px/1.5 var(--song); letter-spacing: .02em; color: var(--dian);
+    text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .er-pg:hover { text-decoration-color: var(--dian); }
+  .er-kind { flex: none; font: 400 12px/1 var(--song); padding: 2px 3px 1px; border: 1px solid currentColor; border-radius: 2px; color: var(--ink-3); }
+  .er-del { margin-left: auto; padding: 0; font: 400 13px/1.5 var(--song); color: var(--ink-3);
+    text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .er-del:hover { color: var(--danger); text-decoration-color: var(--danger); }
+  .er-del:disabled { opacity: .5; cursor: default; }
+
+  /* 原文 → 应为：错的那几个字划掉，改的字用蓝黑加粗 */
+  .er-fix { margin: 6px 0 0; font: 400 16px/1.65 var(--kai); overflow-wrap: anywhere; }
+  .er-from { color: var(--danger); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .er-arrow { margin: 0 8px; font-family: var(--song); color: var(--ink-3); }
+  .er-to { font-weight: 600; color: var(--dian-ink); }
+  .er-why { margin: 3px 0 0; font: 400 13.5px/1.65 var(--song); color: var(--ink-2); }
+}
+@keyframes er-hit { 0%, 55% { background: var(--hl-now); border-left-color: var(--tenghuang); } 100% { background: transparent; border-left-color: transparent; } }
+
+/* 页角小标：靛底藤黄字的小方章，压在页的右上角，不碰正文。扫描页那里已经有「重新识别」小条，小标让到它下面 */
+.page > .er-flag {
+  position: absolute; top: 10px; right: 10px; z-index: 4; display: inline-flex; align-items: center; gap: 3px;
+  height: 22px; min-width: 22px; padding: 0 5px; justify-content: center;
+  border: 0; border-radius: 2px; background: var(--dian); color: var(--tenghuang);
+  font: 600 12px/1 var(--song); cursor: pointer; opacity: .86; box-shadow: 0 1px 3px oklch(0.3 0.03 83.6 / .25);
+  transition: opacity .15s, box-shadow .15s;
+}
+.page > .er-flag .er-n { font: 600 11px/1 var(--latin); color: var(--paper); }
+.page > .er-flag:hover, .page > .er-flag:focus-visible { opacity: 1; box-shadow: 0 0 0 2px var(--tenghuang); outline: 0; }
+.page:has(> .ocr-badge) > .er-flag { top: 40px; }
+
+/* 对照模式下点「第 N 页」：译文里出错的那一段闪一下 */
+.tr.er-flash { animation: er-flash 1.9s ease-out; border-radius: 2px; }
+@keyframes er-flash { 0%, 55% { background: var(--hl-now); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) {
+  .errata-sec .er-item.er-hit, .tr.er-flash { animation: none; }
+}

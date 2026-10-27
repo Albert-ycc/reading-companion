@@ -15,6 +15,7 @@ export function showLibrary() {
   $("#home").classList.add("on");
   renderRecent();
   renderRoots();
+  window.dispatchEvent(new CustomEvent("library-shown")); // 回到书架了：模块可以刷新自己放在书架上的东西
 }
 
 function showViewer() {
@@ -23,7 +24,7 @@ function showViewer() {
   $("#home").classList.remove("on");
 }
 
-async function ensurePermission(handle) {
+export async function ensurePermission(handle) {
   if ((await handle.queryPermission({ mode: "read" })) === "granted") return true;
   return (await handle.requestPermission({ mode: "read" })) === "granted";
 }
@@ -259,9 +260,12 @@ async function renderDesk(b, p, down) {
       ...quote,
       el("div", { className: "acts" },
         el("button", { className: "btn solid", textContent: p ? `接着读第 ${p.page} 页` : "打开", onclick: open }),
-        info ? el("span", { className: "st", textContent: `划线 ${info.highlights} · 提问 ${info.questions}` }) : "")),
+        info ? el("span", { className: "st", textContent: `划线 ${info.highlights} · 提问 ${info.questions}` }) : ""),
+      el("div", { className: "desk-ext" })), // 给模块留的位置：学习模块在这里写「还有 N 道小问题 · 今天 N 条到期」
     removeBtn(b));
   desk.style.setProperty("--p", pctOf(p) + "%");
+  // 书桌画好了（每次重画都是一张新的 .desk-ext）：detail.node 是 #desk，往 .desk-ext 里追加自己的内容
+  window.dispatchEvent(new CustomEvent("desk-rendered", { detail: { key: b.key, title: b.title, node: desk } }));
 }
 
 async function renderRecent() {

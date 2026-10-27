@@ -1,0 +1,10 @@
+/* 批注视图的「导出」：两个按钮加一行说明。类名都以 ex- 开头，收在 #view-notes 里。 */
+#view-notes {
+  .ex-hint { margin: 0; font: 400 13.5px/1.6 var(--song); color: var(--ink-3); }
+  .ex-acts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }
+  .ex-main { padding: 9px 16px; border-radius: 3px; background: var(--dian); color: var(--paper); font: 500 14px/1.2 var(--song); letter-spacing: .06em; transition: background-color .15s; }
+  .ex-main:hover:not(:disabled) { background: var(--dian-ink); }
+  .ex-sub { padding: 9px 2px; font: 400 13.5px/1.2 var(--song); color: var(--dian); text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .ex-sub:hover:not(:disabled) { text-decoration-style: solid; }
+  .ex-last { margin: 10px 0 0; font: 400 12.5px/1.5 var(--song); color: var(--ink-3); overflow-wrap: anywhere; }
+}

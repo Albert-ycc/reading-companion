@@ -109,8 +109,8 @@ let revealSeq = 0; // 连点几处出处时，只让最后一次的旁线留下
 let pinStop = null; // 停掉「引句钉在 35% 处」的函数，见 pinLine
 let back = null; // 跳走之前的位置：{ page, scroll }，书页底部「回到第 N 页」用
 function renderSees() {
-  $("#sees").hidden = !pdf;
-  if (!pdf) return;
+  $("#sees").hidden = !pdf || !$("#library").hidden; // 书架开着时问的是全库，不对着哪一页：不显示「Claude 看到」
+  if (!pdf || !$("#library").hidden) return;
   if (seenSel) {
     $("#sees-label").textContent = `Claude 看到 · 第 ${seenSel.page} 页` + (seenSel.image ? " · 框选" : "");
     if (seenSel.image) { // 框选的区域：显示缩略图
@@ -129,6 +129,8 @@ function renderSees() {
     $("#sees-quote").replaceChildren();
   }
 }
+
+window.addEventListener("library-shown", renderSees); // 回书架：收起「Claude 看到」；回到书里时 openBook 的 updatePage 会重新画出来
 
 // 划线原文拿来显示：PDF 换行在中文之间留下的空白去掉，西文之间留一个空格
 export const tidyText = (t) => t.replace(/([\u3400-\u9fff，。、；：！？）」])\s+(?=[\u3400-\u9fff（「])/g, "$1").replace(/\s+/g, " ");
@@ -268,6 +270,7 @@ export async function openBook(file, key, title) {
     stateSnap = null;
     lazy.disconnect(); // 旧书的页不再观察：它们的页码和新书的对得上，会把新书的页当成划走了
     keep.disconnect();
+    for (const div of pageDivs) if (div.firstChild) announceCleared(+div.dataset.page); // 旧书画过的页都清掉了
     viewer.replaceChildren();
     textLayers.clear();
     pageText.clear();
@@ -364,6 +367,7 @@ function layout() {
   for (const div of pageDivs) {
     lazy.unobserve(div);
     keep.unobserve(div);
+    if (div.firstChild) announceCleared(+div.dataset.page); // 整个重建：画过的页里别的模块放的层也跟着没了
     div.replaceChildren();
     div.classList.remove("bilingual");
     div.style.width = base.width * scale + "px";
@@ -570,6 +574,7 @@ function drop(n) {
   if (!div.classList.contains("bilingual")) {
     for (const tl of div.querySelectorAll(".textLayer")) textLayers.delete(tl); // 不然留到下次松开鼠标才清，纯滚动划过几百页就滞留几百页的文字树
     div.replaceChildren();
+    announceCleared(n);
   }
   pdf.getPage(n).then((p) => p.cleanup()).catch(() => {}); // pdf.js 丢掉这页解码出来的图；还有渲染在跑时它会等跑完再丢
 }
@@ -631,6 +636,7 @@ async function renderInto(n, doc, seq, job) {
   registerLayer(tl);
 
   drawHighlights(n);
+  if (pageText.get(n).trim()) announceRendered(n); // 文字版：文字层就绪了。扫描页的文字层要等识别完铺好再发（ocrPage 里）
   job.task = page.render({
     canvasContext: canvas.getContext("2d"), viewport,
     transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
@@ -653,9 +659,76 @@ async function renderInto(n, doc, seq, job) {
     if (plan) {
       enqueue(n, restructure(div, plan, registerLayer));
       drawHighlights(n);
+      announceRendered(n); // 重排把页里的东西整个换掉了（包括别的模块放进去的层）：再发一次，让它们重放
     }
   }
+  // 识别过的扫描页：页角留一个小小的「重新识别」（对照重排会把页里的东西整个换掉，所以放在最后）
+  if (scanned.has(n) && ocrLines.has(n) && doc === pdf && !stale() && canvas.isConnected) mountRedo(n, page, div, doc);
 }
+
+// ---------- 扫描页的「重新识别」 ----------
+// 识别认错字、漏行时，页角点「重新识别」：服务端跳过缓存再识别一遍（成功了覆盖缓存，失败了旧的不动），
+// 页面把这一页整个按新结果重画（文字层、对照译文、页上的各模块层都跟着重铺），重铺后文字层就绪时再发一次 page-rendered
+function mountRedo(n, page, div, doc) {
+  div.querySelector(":scope > .ocr-badge.redo")?.remove();
+  const chip = el("button", { type: "button", className: "ocr-badge redo", textContent: "重新识别", title: "这一页的文字认错了或漏了，重新识别一遍" });
+  chip.addEventListener("click", () => redoOcr(n, page, div, doc, chip));
+  div.appendChild(chip);
+}
+
+async function redoOcr(n, page, div, doc, chip) {
+  if (chip.disabled) return;
+  chip.disabled = true;
+  chip.classList.add("busy");
+  chip.textContent = "重新识别中…";
+  const undo = () => { if (chip.isConnected) { chip.disabled = false; chip.classList.remove("busy"); chip.textContent = "重新识别"; } };
+  let lines;
+  try {
+    const dataUrl = await hiresJpeg(page);
+    if (doc !== pdf) return;
+    const res = await api("/api/ocr", { file: bookKeyOf.get(doc), page: n, dataUrl, force: true });
+    if (doc !== pdf) return;
+    if (!res.lines) throw Object.assign(new Error(res.error || "未知原因"), { name: "OcrFailed" });
+    lines = readingOrder(res.lines);
+  } catch (err) {
+    undo();
+    if (doc === pdf) toast(`第 ${n} 页重新识别没成功：${err.name === "OcrFailed" ? err.message : whyFailed(err, "再试一次")}。页上还是原来的文字`, undefined, 5000);
+    return;
+  }
+  ocrLines.set(n, lines);
+  await rerender(n);
+  if (doc !== pdf) return;
+  // 这一页正是 Claude 眼前的那一页：把新识别的文字补发给它
+  if (stateSnap && n >= currentPage && n <= currentTo) {
+    syncState({ page: currentPage, pageTo: currentTo, pageText: viewText(currentPage, currentTo), ocr: viewOcr(currentPage, currentTo) }).catch(() => {});
+  }
+  toast(`第 ${n} 页已重新识别`);
+}
+
+// 把一页清空、整个重画（识别结果已经换成新的、在 ocrLines 里）。和 drop 的区别：对照页也彻底清掉，连页高都重来
+function rerender(n) {
+  const div = pageDivs[n - 1];
+  const job = jobs.get(n);
+  if (job) { job.cancelled = true; job.task?.cancel(); jobs.delete(n); }
+  rendering.delete(n);
+  ocrFailed.delete(n);
+  for (const c of div.querySelectorAll("canvas")) c.width = c.height = 0;
+  for (const tl of div.querySelectorAll(".textLayer")) textLayers.delete(tl);
+  div.classList.remove("bilingual");
+  div.replaceChildren();
+  div.style.width = base.width * scale + "px";
+  div.style.height = base.height * scale + "px"; // 先占住大概的高度，免得清空的一瞬间页高塌掉、滚动位置跳；画的时候会按这一页的真实尺寸改
+  announceCleared(n);
+  return renderPage(n);
+}
+
+// 某页的文字层就绪：在 window 上发 page-rendered，detail: { page, div }。
+// 同一页会发多次（文字版画好、扫描页识别完铺好文字层、中英对照重排之后、重新识别之后），收到的模块要能重复处理：先清掉自己上次放的层再放。
+// 页面内容被清空（离开阅读区、缩放重排、换书）时发 page-cleared，detail: { page }
+const announceRendered = (n) => {
+  if (pageDivs[n - 1]) window.dispatchEvent(new CustomEvent("page-rendered", { detail: { page: n, div: pageDivs[n - 1] } }));
+};
+const announceCleared = (n) => window.dispatchEvent(new CustomEvent("page-cleared", { detail: { page: n } }));
 
 // 收掉像素的对照页翻回来了：整页重画一次（不上屏），再切回各个原图块。译文、文字层、页高都还在，什么都不跳
 async function refillCrops(page, viewport, div, job, stale) {
@@ -692,6 +765,19 @@ function recognize(n, page, doc) {
     ocrRuns.set(n, cur);
   }
   return cur.run;
+}
+
+// 这页已有的识别结果：先看页面里记着的，再问服务端缓存（一次 GET，不渲染图、不识别）；都没有返回 null
+async function cachedLines(n, doc) {
+  const hit = ocrLines.get(n);
+  if (hit) return hit;
+  let res;
+  try { res = await api(`/api/ocr?file=${encodeURIComponent(bookKeyOf.get(doc))}&page=${n}`); } catch { return null; }
+  if (doc !== pdf || !res?.lines) return null;
+  const lines = readingOrder(res.lines);
+  ocrLines.set(n, lines);
+  scanned.add(n);
+  return lines;
 }
 
 async function runOcr(n, page, doc) {
@@ -760,6 +846,7 @@ async function ocrPage(n, page, div, tl, doc, quiet = false) {
   }
   numberSpans(tl);
   attachEnd(tl);
+  if (tl.isConnected) announceRendered(n); // 识别完的文字层铺好了（页已经收掉的不发）。对照模式下随后的切块重排还会再发一次
 }
 
 // 给文字层的每个片段记下原始顺序：中英对照会把片段按行带搬进各个原图块，
@@ -993,9 +1080,11 @@ function drawHighlights(n) {
     for (const hl of highlights) {
       for (const part of hl.parts || []) {
         if (part.page !== n) continue;
-        for (const [x, y, w, h] of part.rects) {
+        // 带眉批（hl.note）的划线：只在第一部分的第一行上放一个角标（.noted），整条划线一个，不是每行一个
+        const noted = typeof hl.note === "string" && hl.note.trim() && part === hl.parts[0];
+        for (const [i, [x, y, w, h]] of part.rects.entries()) {
           const r = document.createElement("div");
-          r.className = "hl" + (hl.kind ? " " + hl.kind : "") + (hl === currentHl ? " current" : "");
+          r.className = "hl" + (hl.kind ? " " + hl.kind : "") + (hl === currentHl ? " current" : "") + (noted && i === 0 ? " noted" : "");
           Object.assign(r.style, { left: x * 100 + "%", top: y * 100 + "%", width: w * 100 + "%", height: h * 100 + "%" });
           hlOf.set(r, hl);
           surface.appendChild(r);
@@ -1199,6 +1288,10 @@ function queueHl(hl, path, body) {
 const saveHl = (hl) => queueHl(hl, "/api/highlight", { file: fileKey, highlight: hl });
 const dropHl = (hl) => queueHl(hl, "/api/highlight/delete", { file: fileKey, id: hl.id, at: hl.at, text: hl.text });
 
+// 划线列表有变化：detail: { kind: "add" | "remove" | "restore", hl }。新增（addHighlight 写成功之后）、删除（划线库里删成功、页上擦掉之后，
+// 同一处重复记下的几条每条各发一次）、撤销写回（含框选划线）三处都发。想知道「划线有哪些」的模块（划线列表）听它，不用拼 highlight / highlight-removed
+const highlightsChanged = (kind, hl) => window.dispatchEvent(new CustomEvent("highlights-changed", { detail: { kind, hl } }));
+
 const redraw = (...hls) => new Set(hls.flatMap((h) => (h?.parts || []).map((p) => p.page))).forEach(drawHighlights);
 
 // 删一条划线（连同同一处重复记下的几条）：划线库里先删成功，页上才擦掉；它正是 Claude 看到的那句时，Claude 改回看整页。
@@ -1211,8 +1304,9 @@ export async function removeHighlight(hl) {
   const gone = highlights.filter((h) => h === hl || sameSpot(h, hl));
   if (!gone.includes(hl)) gone.push(hl);
   removing.add(hl);
+  let dropped;
   try {
-    await Promise.all(gone.filter((h) => h.parts).map(dropHl));
+    dropped = await Promise.all(gone.filter((h) => h.parts).map(async (h) => ({ h, res: await dropHl(h) })));
   } catch (err) {
     return toast(`没删掉：${whyFailed(err, "再试一次")}`, undefined, 5000);
   } finally {
@@ -1232,7 +1326,17 @@ export async function removeHighlight(hl) {
     syncState({ selection: null }).catch(() => { if (stateSnap && file === fileKey) stateSnap = { ...stateSnap, selection: null }; });
   }
   window.dispatchEvent(new CustomEvent("highlight-removed", { detail: hl }));
-  toast(`${noun}已删掉`, { label: "撤销", run: () => restoreHighlights(gone, file, noun) });
+  for (const h of gone) highlightsChanged("remove", h);
+  // 撤销写回的是服务端删掉的那份整条（removed_items，带另一个窗口刚写的眉批），不是自己内存里可能已经过期的这份；服务端没回（已被别处删掉）才用内存里的
+  const back = [], seen = new Set();
+  for (const h of gone) {
+    const got = dropped.find((d) => d.h === h)?.res?.removed_items;
+    for (const it of Array.isArray(got) && got.length ? got : [h]) {
+      const k = it.id || `${it.at}\n${it.text}`;
+      if (!seen.has(k)) { seen.add(k); back.push(it); }
+    }
+  }
+  toast(`${noun}已删掉`, { label: "撤销", run: () => restoreHighlights(back, file, noun) });
 }
 
 // 撤销删除：用原来的 id 写回划线库，页上画回来；划线（不是框选）还让 Claude 重新看到它
@@ -1246,6 +1350,7 @@ async function restoreHighlights(list, file, noun) {
   if (file !== fileKey) return;
   highlights.push(...list);
   redraw(...list);
+  for (const h of list) highlightsChanged("restore", h); // 不复用 highlight 事件：chat.js 听它会弹「已划线」；框选划线下面直接 return，所以这里先发
   const hl = list[0];
   if (hl.kind) return toast(`${noun}已恢复`);
   await pick(hl).catch(() => {});
@@ -1347,6 +1452,8 @@ document.addEventListener("click", (e) => {
   if (!hl) return;
   openMenu(e.clientX, e.clientY, [
     ...(hl.kind ? [] : [menuBtn("问这句", () => lookAt(hl))]), // 框选区域的上下文（区域图、框内文字）没存在划线里，没法重新交给 Claude
+    ...(hl.kind === "region" ? [menuBtn("识别成表格", () => window.dispatchEvent(new CustomEvent("region-table", { detail: hl })))] : []), // 框选划线才有；region.js 听这个事件，把区域图识别成 Markdown 表 / CSV
+    menuBtn("眉批", () => window.dispatchEvent(new CustomEvent("highlight-note", { detail: hl }))), // 批注视图的模块（notes.js）听这个事件，在这条划线上写眉批
     menuBtn("删除这条划线", () => removeHighlight(hl)),
   ]);
 });
@@ -1379,6 +1486,7 @@ export function addHighlight(hl, selection) {
   return saveHl(hl).then(() => { written = true; return syncState({ page: hl.page || currentPage, selection }); }).then(() => {
     showCtx(hl);
     window.dispatchEvent(new CustomEvent("highlight", { detail: hl }));
+    highlightsChanged("add", hl);
   }, (err) => {
     const i = highlights.indexOf(hl);
     if (i >= 0) highlights.splice(i, 1);
@@ -1391,20 +1499,31 @@ export function addHighlight(hl, selection) {
 
 export const getPdf = () => pdf;
 export const getCurrentPage = () => currentPage;
+// 当前这本书的划线（就是页上画的那一批对象，不是拷贝）：模块可以改 hl.note 之后调 redrawHighlight(hl) 让页上的角标跟着变
+export const getHighlights = () => highlights;
+// 重画这条划线所在的页（跨页的划线几页都画）
+export const redrawHighlight = (hl) => redraw(hl);
 export const pageDiv = (n) => pageDivs[n - 1];
 export const isScanned = (n) => scanned.has(n);
 export { surfaceAt, contextOf, hiresJpeg, renderPage };
 
 // 任意一页的纯文字：有文字层直接取；扫描页走识别（有缓存，没识别过的约 1.3 秒一页）。
 // 识别失败时返回空串但不进缓存，下一次调用会重新识别（导读的「只重新识别这几页」靠这个）
-export async function extractText(n) {
+// opts.ocr === false：扫描页只用已有的识别结果（页面里的、服务端缓存里的），没有就直接返回空串，不排队去识别
+// （术语、对比、全库这类后台扫页的模块用它，免得为了扫一遍把整本书送去识别；空串不进缓存，之后用默认参数调还会识别）
+export async function extractText(n, opts) {
+  const ocr = opts?.ocr !== false; // 第二个参数不是对象（比如被 map 当回调塞进来的下标）也当默认
   if (pageText.has(n) && (pageText.get(n) || !scanned.has(n))) return pageText.get(n);
   const doc = pdf;
   const page = await doc.getPage(n);
   const tc = await page.getTextContent();
   let text = tc.items.map((it) => it.str + (it.hasEOL ? "\n" : "")).join("");
   let failed = false;
-  if (!text.trim()) {
+  if (!text.trim() && !ocr) {
+    const lines = await cachedLines(n, doc);
+    if (!lines) return "";
+    text = lines.map((l) => l.text).join("\n");
+  } else if (!text.trim()) {
     try {
       const lines = await recognize(n, page, doc);
       if (lines) text = lines.map((l) => l.text).join("\n");

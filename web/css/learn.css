@@ -1,0 +1,67 @@
+/* 学习视图：小问题 · 复习 · 概念三节。规则都收在 #view-learn 里，类名带 ln- 前缀，不碰别的模块。
+   颜色、字体全用 index.html 的 token；结果标签：对＝靛底、半对＝藤黄底、错＝朱红边。 */
+#view-learn {
+  .sec-h small { margin-left: 8px; font: 400 12.5px/1 var(--latin); letter-spacing: 0; color: var(--ink-3); }
+  .sec-h small:empty { display: none; }
+
+  .ln-note { margin: 2px 0 0; font: 400 13.5px/1.7 var(--song); color: var(--ink-3); }
+  .ln-note.err { color: var(--danger); }
+  .ln-sum { margin: 0 0 6px; font: 400 13px/1.6 var(--song); color: var(--ink-2); }
+  .ln-fold { margin-top: 10px; font: 400 13px/1.5 var(--song); }
+  .ln-link { font: 400 13px/1.5 var(--song); color: var(--dian); text-align: left; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .ln-link:hover { text-decoration-color: var(--dian); }
+
+  /* 一道题 / 一条复习 */
+  .ln-card { padding: 12px 0; border-top: 1px solid var(--rule-soft); }
+  .ln-card:first-child, .ln-sum + .ln-card { border-top: 0; padding-top: 4px; }
+  .ln-qtext { margin: 0; font: 400 15.5px/1.7 var(--kai); color: var(--dian-ink); overflow-wrap: anywhere; }
+  .ln-meta { margin: 4px 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font: 400 12.5px/1.5 var(--song); color: var(--ink-3); }
+  .ln-meta .ln-link { font-size: 12.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln-kind { font: 400 12px/1 var(--song); padding: 2px 3px 1px; border: 1px solid currentColor; border-radius: 2px; color: var(--dian); }
+  .ln-ex { margin: 6px 0 0; font: 400 14px/1.65 var(--latin); color: var(--ink); overflow-wrap: anywhere; }
+  .ln-ex mark { color: inherit; background: var(--hl-past); padding: .06em .1em; border-radius: 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .ln-rev .ln-qtext { margin-top: 10px; }
+  .ln-qtext.dim { color: var(--ink-2); font-size: 14.5px; }
+
+  .ln-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+  .ln-btn { font: 400 13px/1 var(--song); color: var(--ink-2); border: 1px solid var(--rule); border-radius: 3px; padding: 7px 10px; background: var(--paper-hi); transition: border-color .15s, color .15s; }
+  .ln-btn:hover:not(:disabled) { border-color: var(--dian); color: var(--dian); }
+  .ln-btn.solid { background: var(--dian); border-color: var(--dian); color: var(--paper); }
+  .ln-btn.solid:hover:not(:disabled) { background: var(--dian-ink); color: var(--paper); }
+  .ln-text { font: 400 13px/1 var(--song); color: var(--ink-3); padding: 7px 4px; }
+  .ln-text:hover:not(:disabled) { color: var(--dian); }
+  .ln-ta { display: block; width: 100%; min-height: 76px; margin-top: 10px; padding: 10px 12px; resize: vertical; border: 1px solid var(--rule); border-radius: 4px;
+    background: var(--paper-hi); font: 400 14.5px/1.6 var(--song); color: var(--ink); }
+  .ln-ta::placeholder { color: var(--ink-3); }
+  .ln-ta:hover:not(:disabled) { border-color: var(--ink-3); }
+  .ln-ta:focus { outline: 0; border-color: var(--dian); }
+  .ln-ta:disabled { opacity: .6; }
+
+  /* 判卷结果 */
+  .ln-res { display: flex; gap: 10px; align-items: baseline; margin-top: 10px; font: 400 14px/1.65 var(--kai); color: var(--dian-ink); overflow-wrap: anywhere; }
+  .ln-tag { flex: none; font: 400 12px/1 var(--song); padding: 3px 4px 2px; border: 1px solid currentColor; border-radius: 2px; }
+  .ln-tag.right { color: var(--paper); background: var(--dian); border-color: var(--dian); }
+  .ln-tag.half { color: var(--ink); background: var(--tenghuang); border-color: var(--tenghuang); }
+  .ln-tag.wrong { color: var(--danger); }
+  .ln-quiz.answered .ln-qtext { color: var(--ink-2); }
+
+  /* 概念：三列，名字（带一行备注）· 状态 · 书 · 页 */
+  .ln-clist { border-top: 1px solid var(--rule-soft); }
+  .ln-c { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 96px); gap: 0 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--rule-soft); }
+  .ln-cname { min-width: 0; font: 400 14.5px/1.5 var(--song); color: var(--ink); overflow-wrap: anywhere; }
+  .ln-cname small { display: block; font: 400 12.5px/1.5 var(--song); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln-st { font: 400 12.5px/1 var(--song); padding: 5px 8px 4px; border: 1px solid currentColor; border-radius: 10px; white-space: nowrap; transition: opacity .15s; }
+  .ln-st:hover:not(:disabled) { opacity: .75; }
+  .ln-st.stuck { color: var(--danger); }
+  .ln-st.half { color: var(--ink); background: var(--tenghuang); border-color: var(--tenghuang); }
+  .ln-st.done { color: var(--paper); background: var(--dian); border-color: var(--dian); }
+  .ln-cwhere { min-width: 0; display: flex; justify-content: flex-end; font: 400 12px/1.4 var(--song); color: var(--ink-3); white-space: nowrap; }
+  .ln-cwhere.ln-link { font-size: 12px; text-decoration: none; }
+  .ln-cwhere.ln-link .bk { text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .ln-cwhere .bk { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ln-cwhere .pg { flex: none; }
+}
+
+/* 书架书桌上的一行提示（写在 #desk .desk-ext 里） */
+#desk .desk-ext .learn-hint::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--tenghuang); vertical-align: 1px; }
+#view-learn .ln-fold + .ln-card { margin-top: 8px; }

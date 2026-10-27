@@ -1,0 +1,66 @@
+/* 术语本：学习视图里的「术语」一节，和书页上的术语标记、悬停气泡（web/terms.js）。
+   一节里的规则收在 .tm 下；书页标记（.tmarks）和气泡（#tm-tip）是页面上别处的东西，单独写在后面。 */
+.tm {
+  font: 400 14px/1.7 var(--song); color: var(--ink);
+
+  .tm-note { margin: 8px 0 0; font: 400 13px/1.65 var(--song); color: var(--ink-3); }
+  .tm-err { margin: 8px 0 0; font: 400 13.5px/1.6 var(--song); color: var(--danger); }
+  .tm-lnk { font: 400 13px/1.5 var(--song); color: var(--dian); text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); white-space: nowrap; }
+  .tm-lnk:hover { text-decoration-color: var(--dian); }
+
+  /* 开关：在书页上标出 */
+  .tm-swrow { display: flex; align-items: flex-start; gap: 10px; }
+  .tm-sw { position: relative; flex: none; width: 30px; height: 17px; margin-top: 4px; border: 1px solid var(--rule); border-radius: 999px; background: var(--paper-deep); transition: background .15s, border-color .15s; }
+  .tm-sw::after { content: ""; position: absolute; left: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--ink-3); transition: transform .15s, background .15s; }
+  .tm-sw[aria-checked="true"] { background: var(--dian); border-color: var(--dian); }
+  .tm-sw[aria-checked="true"]::after { transform: translateX(13px); background: var(--paper); }
+  .tm-swl { font: 400 14px/1.7 var(--song); color: var(--ink); }
+  .tm-swl small { display: block; font: 400 12.5px/1.55 var(--song); color: var(--ink-3); }
+
+  /* 范围 */
+  .tm-scope { display: flex; align-items: baseline; gap: 8px; margin-top: 14px; font: 400 13px/1.6 var(--song); color: var(--ink-3); }
+  .tm-sl { flex: none; }
+  .tm-st { flex: 1; min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+  .tm-st b { font-weight: 600; color: var(--ink); }
+  .tm-fixwrap { margin-top: 8px; }
+  .tm-fix { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font: 400 13px/1.5 var(--song); color: var(--ink-2); }
+  .tm-num { width: 58px; padding: 5px 6px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper-hi); font: 400 13.5px/1.2 var(--latin); color: var(--ink); }
+  .tm-num:focus { outline: 0; border-color: var(--dian); }
+
+  /* 动作 */
+  .tm-act { margin-top: 14px; }
+  .tm-wait { display: flex; align-items: center; gap: 9px; margin-top: 14px; font: 400 13.5px/1.6 var(--song); color: var(--ink-2); }
+  .tm-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--tenghuang); animation: tm-pulse 1.4s ease-in-out infinite; flex: none; }
+  @media (prefers-reduced-motion: reduce) { .tm-dot { animation: none; } }
+
+  /* 列表：术语（英文）· 页码，下一行一句定义 */
+  .tm-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--rule-soft); font: 400 12.5px/1.6 var(--song); color: var(--ink-3); }
+  .tm-list { margin: 4px 0 0; padding: 0; list-style: none; }
+  .tm-it { padding: 9px 0; border-bottom: 1px solid var(--rule-soft); }
+  .tm-it:last-child { border-bottom: 0; }
+  .tm-list.dim { opacity: .62; }
+  .tm-l1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+  .tm-term { font: 600 15px/1.5 var(--song); color: var(--ink); overflow-wrap: anywhere; }
+  .tm-en { font: italic 400 13px/1.5 var(--latin); color: var(--ink-3); overflow-wrap: anywhere; }
+  .tm-pg { margin-left: auto; font: 400 12.5px/1.5 var(--latin); color: var(--dian); text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); white-space: nowrap; }
+  .tm-pg:hover { text-decoration-color: var(--dian); }
+  .tm-def { margin: 2px 0 0; font: 400 14px/1.7 var(--song); color: var(--ink-2); overflow-wrap: anywhere; }
+  .tm-fold { margin-top: 10px; font: 400 13px/1.5 var(--song); color: var(--ink-3); }
+  .tm-fold:hover { color: var(--dian); }
+}
+
+@keyframes tm-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* 书页上的标记：每页（对照模式下每个原图块）自己追加的一层，z-index 0 在文字层（2）和划线（1）之下，
+   整层不接收鼠标：选字、划线照常，悬停由 terms.js 在 #viewer 上自己判断 */
+.tmarks { position: absolute; inset: 0; z-index: 0; pointer-events: none; mix-blend-mode: multiply; }
+.tmarks .tm-mark { position: absolute; box-sizing: border-box; border-bottom: 1.5px dotted oklch(0.348 0.07 259 / .75); background: oklch(0.348 0.07 259 / .07); border-radius: 1px; }
+
+#tm-tip { position: fixed; z-index: 14; max-width: 300px; padding: 9px 12px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper-hi);
+  box-shadow: 0 6px 18px oklch(0.24 0.012 70 / .16); pointer-events: none; font: 400 13.5px/1.6 var(--song); color: var(--ink);
+  .tt-h { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; }
+  .tt-h b { font: 600 14.5px/1.5 var(--song); }
+  .tt-h i { font: italic 400 13px/1.5 var(--latin); color: var(--ink-3); }
+  .tt-d { margin: 2px 0 0; color: var(--ink-2); }
+  small { display: block; margin-top: 4px; font: 400 12px/1.4 var(--song); color: var(--ink-3); }
+}

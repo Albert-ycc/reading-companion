@@ -1,0 +1,83 @@
+/* 复述批改：学习视图里的「复述」一节（web/retell.js）。全部规则收在 .rt 里，不碰别的模块的类名。
+   视觉沿用评点本：纸、墨、靛、藤黄；稿纸横线做输入框。内容区不到 400px 宽，只用竖排列表。 */
+.rt {
+  font: 400 14px/1.7 var(--song);
+  letter-spacing: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere; /* 模型写出一长串没有空格的字也不撑破栏宽 */
+
+  button { cursor: pointer; }
+  .rt-muted { margin: 0; font: 400 14px/1.7 var(--song); color: var(--ink-3); }
+
+  /* 范围行 */
+  .rt-scope { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; font: 400 13px/20px var(--song); color: var(--ink-3); }
+  .rt-scope-t { color: var(--ink-2); }
+  .rt-when { margin-left: auto; font: 400 12.5px/20px var(--latin); color: var(--ink-3); font-variant-numeric: oldstyle-nums; }
+  .rt-link { margin-left: auto; padding: 0; border: 0; background: none; font: 400 13px/20px var(--song); color: var(--ink-3);
+    text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .rt-link:hover { color: var(--dian); }
+  .rt-edit { margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--rule-soft); border-radius: 3px; background: var(--paper-hi); }
+  .rt-edit-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font: 400 13.5px/1.4 var(--song); color: var(--ink-2); }
+  .rt-edit-row .btn { margin-left: auto; }
+  .rt-num { width: 56px; padding: 5px 6px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper); color: var(--ink);
+    font: 400 14px/1.2 var(--latin); text-align: center; font-variant-numeric: lining-nums; }
+  .rt-num:focus { outline: 0; border-color: var(--dian); }
+
+  /* 输入：稿纸横线，行高 28 与横线间距一致 */
+  .rt-prompt { margin: 14px 0 8px; font: 600 15px/24px var(--song); color: var(--ink); }
+  .rt-ta { display: block; width: 100%; box-sizing: border-box; min-height: 168px; resize: vertical; padding: 4px 12px 6px;
+    border: 1px solid var(--rule); border-radius: 4px; color: var(--ink); caret-color: var(--dian);
+    font: 400 15px/28px var(--song); letter-spacing: 0;
+    background: repeating-linear-gradient(180deg, transparent 0 27px, var(--rule-soft) 27px 28px) 0 4px / 100% 28px local, var(--paper-hi); }
+  .rt-ta:focus { outline: 0; border-color: var(--dian); }
+  .rt-ta[readonly] { color: var(--ink-2); }
+  .rt-bar { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+  .rt-bar .btn:disabled { opacity: .45; cursor: default; }
+  .rt-bar .btn.solid:disabled:hover { background: var(--dian); }
+  .rt-count { margin-left: auto; font: 400 12.5px/1 var(--song); color: var(--ink-3); }
+  .rt-progress { margin: 12px 0 0; display: flex; align-items: baseline; gap: 8px; font: 400 13.5px/1.6 var(--song); color: var(--ink-2); }
+  .rt-progress::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; transform: translateY(-1px);
+    background: var(--tenghuang); animation: rt-pulse 1.4s ease-in-out infinite; }
+  @keyframes rt-pulse { 50% { opacity: .35; } }
+  .rt-hint { margin: 8px 0 0; font: 400 13px/1.6 var(--song); color: var(--ink-3); }
+  .rt-err { margin: 10px 0 0; font: 400 13.5px/1.6 var(--song); color: var(--danger); }
+
+  /* 结果 */
+  .rt-mine { margin: 10px 0 0; font: 400 13px/1.6 var(--song); color: var(--ink-3); }
+  .rt-mine summary { cursor: pointer; width: fit-content; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--rule); }
+  .rt-mine p { margin: 6px 0 0; padding: 8px 12px; border-left: 2px solid var(--rule); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .rt-feedback { margin: 14px 0 0; font: 400 16px/1.8 var(--kai); color: var(--dian-ink); }
+  .rt-h { margin: 22px 0 6px; font: 600 14px/22px var(--song); letter-spacing: .04em; color: var(--ink); }
+  .rt-h small { font: 400 12.5px/1 var(--song); letter-spacing: 0; color: var(--dian); }
+  .rt-none { margin: 0; font: 400 13.5px/1.6 var(--song); color: var(--ink-3); }
+  .rt-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+  .rt-list li { padding: 9px 2px 9px 14px; border-bottom: 1px solid var(--rule-soft); position: relative; font: 400 14.5px/1.65 var(--song); color: var(--ink); }
+  .rt-list li::before { content: ""; position: absolute; left: 1px; top: 17px; width: 5px; height: 5px; background: var(--tenghuang); }
+  .rt-list.wrong li { padding-left: 12px; border-left: 2px solid var(--danger); margin-left: 0; }
+  .rt-list.wrong li::before { display: none; }
+  .rt-said, .rt-act { display: block; }
+  .rt-said { color: var(--ink-2); }
+  .rt-act { margin-top: 4px; }
+  .rt-said b, .rt-act b { display: inline-block; margin-right: 8px; font: 400 12px/1 var(--song); color: var(--ink-3); letter-spacing: .02em; }
+  .rt-pg { display: inline-block; vertical-align: 1px; margin-left: 2px; padding: 2px 6px 1px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
+    font: 400 12px/1.4 var(--song); color: var(--dian); white-space: nowrap; transition: border-color .15s, background .15s; }
+  .rt-pg:hover { border-color: var(--dian); background: var(--paper); }
+  .rt-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rt-chip { max-width: 100%; display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 8px 3px 7px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper-hi);
+    font: 400 13.5px/1.5 var(--song); color: var(--ink); }
+  .rt-chip i { font: 400 11.5px/1 var(--song); font-style: normal; color: var(--ink-3); }
+  .rt-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; align-self: center; }
+  .rt-chip.ok::before { background: var(--dian); }
+  .rt-chip.half::before { background: var(--tenghuang); }
+  .rt-acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+  .rt-acts .btn.sm { font-size: 13px; padding: 7px 11px; }
+
+  /* 最近的复述 */
+  .rt-hist { margin-top: 24px; padding-top: 4px; border-top: 1px solid var(--rule-soft); }
+  .rt-hist ul { list-style: none; margin: 0; padding: 0; }
+  .rt-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 2px; border: 0; border-bottom: 1px solid var(--rule-soft);
+    background: none; text-align: left; font: 400 13.5px/1.5 var(--song); color: var(--ink-2); }
+  .rt-row:hover, .rt-row.on { color: var(--dian); }
+  .rt-row-a { text-wrap: pretty; }
+  .rt-row-b { flex: none; font: 400 12.5px/1.5 var(--song); color: var(--ink-3); white-space: nowrap; }
+}

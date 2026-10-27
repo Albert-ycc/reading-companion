@@ -1,7 +1,7 @@
 // 入口：书架 / 阅读器 / 对话栏的串联，外加拖入文件、Finder「打开方式」和安装到桌面
 import { showLibrary, openHandle } from "./library.js";
 import { loadChat } from "./chat.js";
-import { $, toast } from "./ui.js";
+import { $, toast, api } from "./ui.js";
 
 const titleOf = (name) => name.replace(/\.pdf$/i, "");
 
@@ -78,6 +78,31 @@ showLibrary();
 loadChat();
 
 // 功能模块：各自独立加载，写坏一个只在控制台报错，不影响别的
-for (const m of ["./region.js", "./slash.js", "./predict.js", "./guide.js", "./mindmap.js"]) {
-  import(m).catch((err) => console.error("功能模块加载失败：", m, err));
+const loads = ["./region.js", "./slash.js", "./predict.js", "./guide.js", "./mindmap.js",
+  "./notes.js", "./export.js", "./learn.js", "./retell.js", "./errata.js", "./terms.js", "./recap.js", "./refs.js",
+  "./compare.js", "./askall.js", "./socratic.js"].map((m) =>
+  // 新 Chrome 档案第一次打开时偶尔有一个模块请求被 service worker 接管页面的那一刻掐断（实测 12 次里 1 次 mindmap.js），
+  // 也防服务刚好忙不过来：失败了过 1 秒再请求一次（Chrome 不会把失败的模块请求记住，同一个地址能重新取），还不行才报
+  import(m).catch(() => new Promise((r) => setTimeout(r, 1000)).then(() => import(m)))
+    .catch((err) => console.error("功能模块加载失败：", m, err)));
+
+// 数据文件读坏了，服务把它改名留底、功能按空的接着跑：读者看不出发生过什么，这里弹一次说明（/api/ping 的 quarantined 是这次服务运行里
+// 留底的文件名）。每个留底文件只说一次，刷新页面也不重复（记在 sessionStorage）；启动、模块都加载完、窗口回到前台、切视图、答完一问时各查一次
+const announced = new Set();
+try { for (const n of JSON.parse(sessionStorage.getItem("banDu.quarantine") || "[]")) announced.add(n); } catch {}
+let lastCheck = 0;
+export async function checkQuarantine() {
+  if (Date.now() - lastCheck < 2000) return;
+  lastCheck = Date.now();
+  let r;
+  try { r = await api("/api/ping"); } catch { return; }
+  const fresh = (Array.isArray(r?.quarantined) ? r.quarantined : []).filter((n) => typeof n === "string" && !announced.has(n));
+  if (!fresh.length) return;
+  fresh.forEach((n) => announced.add(n));
+  try { sessionStorage.setItem("banDu.quarantine", JSON.stringify([...announced])); } catch {}
+  toast(`有 ${fresh.length} 个数据文件读坏了，已改名留底在 data/ 里：${fresh.slice(0, 3).join("、")}${fresh.length > 3 ? " 等" : ""}`, undefined, 10000);
 }
+Promise.allSettled(loads).then(() => setTimeout(checkQuarantine, 1200));
+window.addEventListener("focus", checkQuarantine);
+window.addEventListener("view-changed", checkQuarantine);
+window.addEventListener("answer-done", checkQuarantine);

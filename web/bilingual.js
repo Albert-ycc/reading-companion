@@ -292,6 +292,8 @@ export function resetTranslations(context) {
 }
 
 export function enqueue(page, jobs) {
+  // 每段任务记下自己在哪一页、整页有哪些段：译文块上「重译」要把整页的段落一起交给服务端，译完才能把整页缓存里这一段也换掉
+  for (const j of jobs) { j.page = page; j.all ||= jobs; }
   if (jobs.length) pending.set(page, jobs);
   pump();
 }
@@ -330,6 +332,62 @@ function retryFailed(page, jobs) {
   enqueue(page, again);
 }
 
+// 译文块：译文 + 悬停时右上角的「重译」（字在 CSS 伪元素里，不进 textContent，选中复制译文不会带上）
+function showTranslation(job, text) {
+  job.zh = text;
+  job.block.className = "tr";
+  job.block.replaceChildren(text, el("button", {
+    type: "button", className: "tr-redo", title: "重新翻译这一段", ariaLabel: "重新翻译这一段",
+    onclick: (e) => { e.stopPropagation(); retranslate(job); },
+  }));
+}
+
+// 只重译这一段：服务端跳过缓存重新译、覆盖缓存（整页缓存里这一段也换掉）。没译成功就把原来的译文放回去，不让一次失败毁掉一段好译文
+async function retranslate(job) {
+  const block = job.block, old = job.zh;
+  if (!block.isConnected || !ctx || !job.all || block.classList.contains("pending")) return;
+  const gen = generation, signal = abort.signal;
+  block.className = "tr pending";
+  block.replaceChildren("翻译中…");
+  let text = "", why = "";
+  try {
+    const res = await fetch("/api/translate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal,
+      body: JSON.stringify({
+        file: ctx.file(), title: ctx.title(), page: job.page, paragraphs: [job.text], force: true,
+        pageParagraphs: job.all.map((j) => j.text), index: job.all.indexOf(job),
+      }),
+    });
+    if (!res.ok) {
+      why = (await res.json().then((j) => j?.error, () => null)) || `本地服务回了 ${res.status}`;
+    } else {
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.type === "para" && ev.i === 0) text = ev.text || "";
+          else if (ev.type === "error") why = ev.message || "";
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === "AbortError" || gen !== generation) return;
+    why = err instanceof TypeError ? "伴读的本地服务没在运行" : err instanceof SyntaxError ? "服务返回的内容读不懂" : err.message;
+  }
+  if (gen !== generation || !block.isConnected) return;
+  if (text) return showTranslation(job, text);
+  showTranslation(job, old);
+  toast(`重译没成功：${why || "没译出新内容"}，保留了原来的译文`, undefined, 5000);
+}
+
 async function translatePage(page, jobs, gen, signal) {
   const fail = (msg, retryable) => jobs.forEach((j) => {
     if (j.block.classList.contains("pending")) markFailed(j.block, msg, page, jobs, retryable);
@@ -360,8 +418,7 @@ async function translatePage(page, jobs, gen, signal) {
         if (gen !== generation) return;
         const ev = JSON.parse(line);
         if (ev.type === "para" && jobs[ev.i]) {
-          const b = jobs[ev.i].block;
-          if (ev.text) { b.className = "tr"; b.textContent = ev.text; } else b.remove();
+          if (ev.text) showTranslation(jobs[ev.i], ev.text); else jobs[ev.i].block.remove();
         } else if (ev.type === "error") {
           fail(ev.message);
         } else if (ev.type === "done") {

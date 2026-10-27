@@ -25,3 +25,44 @@ body.region-dragging { user-select: none; -webkit-user-select: none; }
   border-radius: 3px; clip-path: none; }
 .hl.region.current { background: var(--region-fill); border: 2px dashed var(--region-line);
   box-shadow: 0 0 0 3px oklch(0.852 0.157 83.6 / 0.28); }
+
+/* 框旁边的「识别成表格」：开始是个小标签，点了变成浮层卡（识别中 → 表格预览 + 复制） */
+#region-card { position: absolute; z-index: 12; box-sizing: border-box; max-width: calc(100% - 24px);
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 7px; box-shadow: 0 3px 14px oklch(0.3 0.03 83.6 / .16); }
+#region-card:focus { outline: none; }
+#region-card.chip { padding: 3px; }
+#region-card .rc-go { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 4px; white-space: nowrap;
+  font: 400 13px/1 var(--song); letter-spacing: .04em; color: var(--ink); }
+#region-card .rc-go::before { content: ""; width: 8px; height: 8px; flex: none; border: 1.5px dashed var(--region-line); border-radius: 1.5px; background: var(--region-fill); }
+#region-card .rc-go:hover { background: var(--paper-deep); color: var(--dian); }
+#region-card.panel { display: flex; flex-direction: column; gap: 9px; padding: 12px 13px; }
+#region-card .rc-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+#region-card .rc-title { font: 600 14px/1.3 var(--song); color: var(--ink); }
+#region-card .rc-meta { margin-left: auto; font: 400 12px/1.3 var(--song); color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+#region-card .rc-dot { width: 7px; height: 7px; flex: none; align-self: center; border-radius: 50%; background: var(--tenghuang); animation: region-card-pulse 1.2s ease-in-out infinite; }
+@keyframes region-card-pulse { 50% { opacity: .35; } }
+#region-card .rc-note { margin: 0; font: 400 12.5px/1.6 var(--song); color: var(--ink-3); overflow-wrap: anywhere; }
+#region-card .rc-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+#region-card .rc-btn { padding: 8px 12px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper-hi); white-space: nowrap;
+  font: 400 13px/1 var(--song); color: var(--ink); transition: border-color .15s, color .15s, background .15s; }
+#region-card .rc-btn:hover { border-color: var(--dian); color: var(--dian); }
+#region-card .rc-btn.solid { background: var(--dian); border-color: var(--dian); color: var(--paper); }
+#region-card .rc-btn.solid:hover { background: var(--dian-ink); color: var(--paper); }
+#region-card .rc-btn.rc-quiet { margin-left: auto; border-color: transparent; background: transparent; color: var(--ink-3); }
+#region-card .rc-btn.rc-quiet:hover { color: var(--ink); border-color: transparent; }
+#region-card .rc-btn:focus-visible, #region-card .rc-go:focus-visible, #region-card .rc-wrap:focus-visible { outline: 2px solid var(--dian); outline-offset: 2px; }
+
+/* 表格预览：最多同时看到三列（列宽至少是预览框的三分之一），更多列在框里横向滚；行多了竖向滚，表头跟着；
+   第一列（行名）横向滚动时钉在左边。数字不在中间断行，靠加宽列、不靠挤 */
+#region-card .rc-wrap { container-type: inline-size; overflow: auto; max-height: 240px; border: 1px solid var(--rule-soft); border-radius: 3px; background: var(--paper-hi); }
+#region-card .rc-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font: 400 13px/1.45 var(--song); color: var(--ink); }
+#region-card .rc-table th, #region-card .rc-table td { box-sizing: border-box; min-width: calc(100cqw / 3 - 1px); max-width: 62cqw; padding: 5px 9px; vertical-align: top; text-align: left;
+  border-right: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); overflow-wrap: break-word; white-space: pre-line; user-select: text; }
+#region-card .rc-table th:last-child, #region-card .rc-table td:last-child { border-right: 0; }
+#region-card .rc-table tbody tr:last-child td { border-bottom: 0; }
+#region-card .rc-table th { position: sticky; top: 0; z-index: 1; background: var(--paper-deep); font-weight: 600; }
+#region-card .rc-table td { font-variant-numeric: tabular-nums; }
+#region-card .rc-table th:first-child, #region-card .rc-table td:first-child { position: sticky; left: 0; z-index: 1; border-right-color: var(--rule); }
+#region-card .rc-table td:first-child { background: var(--paper-hi); }
+#region-card .rc-table th:first-child { z-index: 2; }
+@media (prefers-reduced-motion: reduce) { #region-card .rc-dot { animation: none; } }

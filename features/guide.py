@@ -429,7 +429,7 @@ def register(routes, ctx):
 
     def profile():
         try:
-            return (ctx.ROOT / "learner.md").read_text("utf-8").strip()[:PROFILE_CHARS]
+            return (getattr(ctx, "LEARNER", None) or ctx.ROOT / "learner.md").read_text("utf-8").strip()[:PROFILE_CHARS]
         except OSError:
             return "（没有读者档案）"
 

@@ -5,6 +5,7 @@
 只监听 127.0.0.1；写接口只收本应用页面发来的 JSON，防止别的网站伪造阅读上下文或调起 Claude。
 """
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -35,6 +36,7 @@ PROGRESS = DATA / "progress.json"
 HIGHLIGHTS = DATA / "highlights.json"
 CHATS = DATA / "chats.json"
 CHAT_ARCHIVE = DATA / "chat-archive"  # 点「新对话」时收起的旧对话，每本书一个文件
+LEARNER = Path(os.environ.get("READER_LEARNER") or ROOT / "learner.md")  # 读者档案；写它的功能模块只许写这个路径，沙盒测试时指向沙盒副本
 ASK_CONTEXT_DIR = DATA / "ask-context"  # 每次提问专用的阅读快照，提问结束就删
 PORT = int(os.environ.get("READER_PORT", "8770"))
 ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
@@ -72,6 +74,8 @@ MAX_TEXT = 20000             # 页文字这类字段的字数上限
 MAX_SELECTED = 60000         # 划线、selection 里的文字上限：一条划线最多跨 3 页，字密的期刊每页约 8000 字
 MAX_PAGE = 100000
 MAX_IMAGE = 12 * 1024 * 1024
+MAX_NOTE = 4000              # 划线上眉批的字数上限
+MAX_TURN_TEXT = 500000       # 撤销删除时放回的一条消息的字数上限（一个长回答也远低于它）
 
 ask_lock = threading.Lock()   # 同一时间只跑一个提问
 ask_inflight = {}             # 书 -> {question, at}：正在跑的提问；页面刷新后靠它接回进行中的回答
@@ -84,6 +88,11 @@ CTX = SimpleNamespace()  # 功能模块拿到的上下文；load_features 填，
 
 def book_hash(key):
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _para_digest(paras):
+    """一页段落内容的指纹：译文缓存按「书 + 页 + 指纹」存"""
+    return hashlib.sha1(PARA_SEP.join(paras).encode("utf-8")).hexdigest()[:12]
 
 
 def archive_path(key):
@@ -107,6 +116,9 @@ def _iso_ok(s):
     return True
 
 
+PARA_SEP = "\n\u241e\n"  # 段落之间的分隔，只用来算指纹
+
+
 def _no_constant(name):
     raise ValueError(f"非标准 JSON 常量 {name}")  # 浏览器的 JSON.parse 不认 NaN / Infinity
 
@@ -128,14 +140,58 @@ def read_json(path, default):
         return default
 
 
+QUARANTINED = []  # 这次服务运行中被改名留底的数据文件（相对数据目录的留底文件名），/api/ping 带给页面，页面弹一次说明
+START_TS = time.time()
+
+
 def _quarantine(path, err):
-    """损坏的数据文件改名留底再当成没有：当成空的直接写回，整份数据就被一条新记录覆盖了"""
-    bad = path.with_name(f"{path.name}.corrupt-{time.strftime('%y%m%d-%H%M%S')}")
+    """损坏的数据文件改名留底再当成没有：当成空的直接写回，整份数据就被一条新记录覆盖了。
+    err 是异常或一句原因；留底的文件名记进 QUARANTINED，页面据 /api/ping 提示读者"""
+    stamp = time.strftime("%y%m%d-%H%M%S")
+    bad, n = path.with_name(f"{path.name}.corrupt-{stamp}"), 1
+    while bad.exists():  # 同一秒里留底两次：别把前一份覆盖了
+        n += 1
+        bad = path.with_name(f"{path.name}.corrupt-{stamp}-{n}")
     try:
         os.replace(path, bad)
     except OSError:
         return  # 另一个线程已经改走了
-    print(f"数据文件损坏，已改名留底：{path} -> {bad.name}（{type(err).__name__}: {err}）", file=sys.stderr, flush=True)
+    why = err if isinstance(err, str) else f"{type(err).__name__}: {err}"
+    print(f"数据文件损坏，已改名留底：{path} -> {bad.name}（{why}）", file=sys.stderr, flush=True)
+    try:
+        name = str(bad.relative_to(DATA))
+    except ValueError:
+        name = bad.name
+    if name not in QUARANTINED:
+        QUARANTINED.append(name)
+
+
+def quarantined_names():
+    """本次服务运行期间留底的文件：服务自己记下的，加上数据目录顶层被别的进程（Stop hook 的 qa-index.json）改名留底的"""
+    names = list(QUARANTINED)
+    try:
+        for f in DATA.glob("*.corrupt-*"):
+            # 改名不动 mtime、会动 ctime：ctime 晚于服务启动的才是这次运行里留底的
+            if f.name not in names and f.stat().st_ctime >= START_TS - 1:
+                names.append(f.name)
+    except OSError:
+        pass
+    return names
+
+
+def read_json_as(path, kind, default):
+    """读 JSON 并校验形状：kind 是 "dict" 或 "list"。文件不存在回 default；语法坏了（read_json 已留底）回 default；
+    语法对、形状不对（比如该是对象的写成了数组）也改名留底再回 default，不让下一次写入无声覆盖它"""
+    if kind not in ("dict", "list"):
+        raise ValueError(f"kind 要是 dict 或 list，给的是 {kind!r}")
+    missing = object()
+    data = read_json(path, missing)
+    if data is missing:
+        return default
+    if not isinstance(data, dict if kind == "dict" else list):
+        _quarantine(path, f"形状不对：要 {kind}，实际是 {type(data).__name__}")
+        return default
+    return data
 
 
 def write_json(path, obj):
@@ -182,6 +238,17 @@ def _bool(v, name):
     if not isinstance(v, bool):
         raise BadRequest(f"{name} 要是 true 或 false")
     return v
+
+
+def _flag(v):
+    """可选的开关字段（比如 force）：true、非零数字、「1」「true」「yes」算开，其余（含没带、null、乱写）算关，不报错"""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0 and v == v  # 排除 NaN
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "y", "on")
+    return False
 
 
 _SURROGATE = re.compile("[\ud800-\udfff]")
@@ -303,6 +370,11 @@ def clean_highlight(h):
     for k in ("id", "kind", "image", "at"):
         if k in h:
             out[k] = _text(h[k], f"highlight.{k}", 1000)
+    # 眉批：划线上的一段批语。空的不留字段；撤销删除时整条原样写回，批语跟着回来
+    if h.get("note") is None or h.get("note") == "":
+        out.pop("note", None)
+    else:
+        out["note"] = _text(h["note"], "highlight.note", MAX_NOTE)
     out.setdefault("at", now_iso())
     if len(json.dumps(out, ensure_ascii=False)) > 500_000:
         raise BadRequest("highlight 太大")
@@ -473,7 +545,7 @@ class Handler(SimpleHTTPRequestHandler):
         q = parse_qs(url.query)
         key = q.get("file", [""])[0]
         if url.path == "/api/ping":
-            return self._send_json({"ok": True})
+            return self._send_json({"ok": True, "quarantined": quarantined_names()})
         if url.path == "/api/state":
             return self._send_json(read_json(STATE, {}))
         if url.path == "/api/library":
@@ -505,15 +577,16 @@ class Handler(SimpleHTTPRequestHandler):
             })
         if url.path == "/api/chat":
             # messages 是当前这段对话；asked 是这本书问过的全部问题（含收进历史的），导读找「你问过的」用；
-            # inflight 是这本书正在跑的提问（页面刷新后据此接回），没有就是 null
-            current = read_json(CHATS, {}).get(key, {}).get("messages", [])
+            # inflight 是这本书正在跑的提问（页面刷新后据此接回），没有就是 null；cid 是当前这段对话的身份（还没问过就是 null），删单条问答时带上
+            entry = read_json(CHATS, {}).get(key) or {}
+            current = entry.get("messages", [])
             asked = [{"text": m.get("text", ""), "page": m.get("page")} for c in read_json(archive_path(key), [])
                      for m in c.get("messages", []) if m.get("role") == "user"]
             asked += [{"text": m.get("text", ""), "page": m.get("page")} for m in current if m.get("role") == "user"]
             # busyElsewhere：别的书有提问在跑（同一时间只跑一个），页面据此在发问前就说明「为什么发不了」
             other = next((k for k in list(ask_inflight) if k != key), None)
             busy = None if other is None else {"file": other, "title": ask_titles.get(other) or _title_of(other)}
-            return self._send_json({"messages": current, "asked": asked, "inflight": ask_inflight.get(key), "busyElsewhere": busy})
+            return self._send_json({"messages": current, "asked": asked, "inflight": ask_inflight.get(key), "busyElsewhere": busy, "cid": entry.get("cid")})
         if url.path == "/api/chat/history":
             # 不带 id：只给列表（标题、时间、问了几次），点开哪段再取哪段的全文，历史再多也不拖慢
             convs = read_json(archive_path(key), [])
@@ -570,7 +643,7 @@ class Handler(SimpleHTTPRequestHandler):
                         _text(v, name, 1000 if name != "text" else MAX_SELECTED)
                 allh = read_json(HIGHLIGHTS, {})
                 if key not in allh or not (hid or at):
-                    return self._send_json({"ok": True, "removed": 0})
+                    return self._send_json({"ok": True, "removed": 0, "removed_items": []})
                 same = (lambda h: h.get("id") == hid) if hid else (lambda h: h.get("at") == at and h.get("text") == text)
                 items = allh[key]
                 gone = [h for h in items if same(h)]
@@ -580,32 +653,111 @@ class Handler(SimpleHTTPRequestHandler):
                     for h in gone:
                         if h.get("kind") == "region":
                             CTX.trash_region_image(h.get("image"))
-                return self._send_json({"ok": True, "removed": len(gone)})
+                # removed_items：被删的整条（含另一个窗口刚写的眉批），页面「撤销」时写回的是这份，不是自己内存里可能过期的那份
+                return self._send_json({"ok": True, "removed": len(gone), "removed_items": gone})
             if path == "/api/page-image":
                 return self._save_page_image(body)
             if path == "/api/chat/reset":
                 # 新对话：当前这段收进历史（不删），Claude 换一个新会话
                 key = _text(body.get("file", ""), "file", 2000)
                 chats = read_json(CHATS, {})
-                old = chats.pop(key, None) or {}
-                msgs = old.get("messages") or []
-                if msgs:
-                    first = next((m.get("text", "") for m in msgs if m.get("role") == "user"), "")
-                    CHAT_ARCHIVE.mkdir(parents=True, exist_ok=True)
-                    convs = read_json(archive_path(key), [])
-                    convs.append({
-                        "id": old.get("cid") or new_cid(), "title": " ".join(first.split())[:40] or "（没有提问）",
-                        "startedAt": msgs[0].get("at"), "endedAt": msgs[-1].get("at"),
-                        "count": sum(1 for m in msgs if m.get("role") == "user"),
-                        "session": old.get("session"), "messages": msgs,
-                    })
-                    write_json(archive_path(key), convs)
+                archived = archive_current(chats, key) is not None
                 write_json(CHATS, chats)
-                return self._send_json({"ok": True, "archived": bool(msgs)})
+                return self._send_json({"ok": True, "archived": archived})
+            if path == "/api/chat/restore":
+                return self._chat_restore(body)
+            if path == "/api/chat/delete":
+                return self._chat_delete(body)
+            if path == "/api/chat/restore-turn":
+                return self._chat_restore_turn(body)
         fn = ROUTES.get(("POST", path))
         if fn:
             return fn(self, body)
         return self._send_json({"error": "not found"}, 404)
+
+    # ---------- 历史对话放回当前、删单条问答（调用方已持有 data_lock）----------
+    def _chat_restore(self, body):
+        """把存档里的一段放回当前对话，Claude 会话也接上；当前对话已有内容就先收进历史。取走的那段从历史里拿掉"""
+        key = _text(body.get("file", ""), "file", 2000)  # 空串是书架上的「全库」那段对话，合法
+        cid = _text(body.get("id", ""), "id", 200)
+        if not cid:
+            raise BadRequest("缺少 id")
+        chats = read_json(CHATS, {})
+        conv = next((c for c in read_json(archive_path(key), []) if isinstance(c, dict) and c.get("id") == cid), None)
+        if conv is None:
+            if (chats.get(key) or {}).get("cid") == cid:  # 已经是当前对话（连点了两下）
+                return self._send_json({"ok": True, "restored": False, "already": True})
+            return self._send_json({"error": "没有这段对话"}, 404)
+        if key in ask_inflight:  # 回答期间换掉当前对话，这一问的答案就落进被收起的那段里，界面上看不见
+            return self._send_json({"error": "Claude 还在回答这本书里的提问，答完再接着聊旧的对话"}, 409)
+        archived = archive_current(chats, key) is not None
+        rest = [c for c in read_json(archive_path(key), []) if not (isinstance(c, dict) and c.get("id") == cid)]
+        write_json(archive_path(key), rest)
+        msgs = conv.get("messages") if isinstance(conv.get("messages"), list) else []
+        chats[key] = {"messages": msgs, "cid": cid, "session": conv.get("session")}
+        write_json(CHATS, chats)
+        return self._send_json({"ok": True, "restored": True, "archived": archived, "count": sum(1 for m in msgs if m.get("role") == "user"),
+                                "session": bool(conv.get("session"))})
+
+    def _chat_delete(self, body):
+        """删当前对话里的一问一答：按提问那条的 at 认，连同紧跟的回答。cid 给了就必须是当前这段对话，对不上不删。
+        回包带被删的消息和位置，页面「撤销」时原样交给 /api/chat/restore-turn。Claude 会话里那一轮仍在，这里只管记录"""
+        key = _text(body.get("file", ""), "file", 2000)
+        at = _text(body.get("at", ""), "at", 100)
+        cid = body.get("cid")
+        if cid is not None:
+            _text(cid, "cid", 200)
+        if not at:
+            raise BadRequest("缺少 at")
+        chats = read_json(CHATS, {})
+        entry = chats.get(key)
+        if not isinstance(entry, dict) or (cid and entry.get("cid") != cid):
+            return self._send_json({"ok": True, "removed": 0})
+        msgs = entry.get("messages") if isinstance(entry.get("messages"), list) else []
+        i = next((i for i, m in enumerate(msgs) if isinstance(m, dict) and m.get("role") == "user" and m.get("at") == at), None)
+        if i is None:
+            return self._send_json({"ok": True, "removed": 0})
+        j = i + 2 if i + 1 < len(msgs) and isinstance(msgs[i + 1], dict) and msgs[i + 1].get("role") == "assistant" else i + 1
+        gone = msgs[i:j]
+        entry["messages"] = msgs[:i] + msgs[j:]
+        write_json(CHATS, chats)
+        return self._send_json({"ok": True, "removed": 1, "index": i, "cid": entry.get("cid"), "messages": gone})
+
+    def _chat_restore_turn(self, body):
+        """撤销删除：把 /api/chat/delete 回给页面的那一问一答放回原来的位置。当前对话已经换了就放不回去"""
+        key = _text(body.get("file", ""), "file", 2000)
+        cid = body.get("cid")
+        if cid is not None:
+            _text(cid, "cid", 200)
+        index = _int(body.get("index"), "index", 0, 1000000)
+        raw = body.get("messages")
+        if not isinstance(raw, list) or not 1 <= len(raw) <= 2:
+            raise BadRequest("messages 要是 1 到 2 条消息")
+        msgs = []
+        for m in raw:
+            if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+                raise BadRequest("消息要有 role")
+            item = {"role": m["role"], "text": _text(m.get("text"), "text", MAX_TURN_TEXT), "at": _text(m.get("at"), "at", 100)}
+            if "page" in m and type(m["page"]) is int:
+                item["page"] = m["page"]
+            if isinstance(m.get("quote"), dict):
+                item["quote"] = m["quote"]
+            if isinstance(m.get("attachments"), list):
+                item["attachments"] = [{"url": a["url"]} for a in m["attachments"] if isinstance(a, dict) and isinstance(a.get("url"), str)][:6]
+            if isinstance(m.get("interrupted"), str):
+                item["interrupted"] = m["interrupted"][:1000]
+            msgs.append(item)
+        chats = read_json(CHATS, {})
+        entry = chats.get(key)
+        if not isinstance(entry, dict) or (cid and entry.get("cid") != cid):
+            return self._send_json({"error": "这段对话已经收进历史或换掉了，放不回去"}, 409)
+        cur = entry.get("messages") if isinstance(entry.get("messages"), list) else []
+        if any(isinstance(m, dict) and m.get("role") == "user" and m.get("at") == msgs[0]["at"] for m in cur):
+            return self._send_json({"ok": True, "restored": False})  # 已经在了（撤销点了两下）
+        at = min(index, len(cur))
+        entry["messages"] = cur[:at] + msgs + cur[at:]
+        write_json(CHATS, chats)
+        return self._send_json({"ok": True, "restored": True})
 
     def _save_state(self, new):
         state = read_json(STATE, {})
@@ -643,9 +795,12 @@ class Handler(SimpleHTTPRequestHandler):
     def _ocr(self, body):
         key, page = _text(body.get("file", ""), "file", 2000), _int(body.get("page"), "page")
         cache = ocr_cache(key, page)
-        cached = read_json(cache, None)
+        force = _flag(body.get("force"))  # 页角的「重新识别」：跳过缓存重识别一遍，成功了覆盖缓存，失败了旧缓存原样留着
+        cached = None if force else read_json(cache, None)
         if cached is not None:
             return self._send_json(cached)
+        if not isinstance(body.get("dataUrl"), str):
+            raise BadRequest("缺少要识别的页图（dataUrl）")  # 没有缓存可走、或 force 重识别时，必须带图
         raw = jpeg_bytes(body.get("dataUrl"))
         if not OCR_BIN.exists():
             return self._send_json({"error": "识别工具还没编译，在伴读目录运行 ./install.sh"}, 503)
@@ -675,12 +830,21 @@ class Handler(SimpleHTTPRequestHandler):
             raise BadRequest("paragraphs 要是文字数组")
         if len(paras) > TRANSLATE_MAX_PARAS or sum(map(len, paras)) > TRANSLATE_MAX_CHARS:
             raise BadRequest("这一页的文字太多，翻译不了", 413)
+        force = _flag(body.get("force"))  # 译文块的「重译」：跳过缓存重新译，译完覆盖
+        # 重译一段时，页面带上整页的段落（pageParagraphs）和这段在其中的序号（index）：译完把整页缓存里这一段也换成新译文，
+        # 否则翻走再翻回来，读到的还是整页缓存里的旧译文
+        whole, at = body.get("pageParagraphs"), body.get("index")
+        if whole is not None and (not isinstance(whole, list) or not all(isinstance(p, str) for p in whole)
+                                  or len(whole) > TRANSLATE_MAX_PARAS or sum(map(len, whole)) > TRANSLATE_MAX_CHARS):
+            raise BadRequest("pageParagraphs 要是文字数组，且不能超过一页的上限")
+        if at is not None:
+            _int(at, "index", 0, TRANSLATE_MAX_PARAS)
         self._begin_ndjson()
         if not paras:
             return self._say({"type": "done"})
-        digest = hashlib.sha1("\n\u241e\n".join(paras).encode("utf-8")).hexdigest()[:12]
+        digest = _para_digest(paras)
         cache = TRANSLATE_DIR / book_hash(key) / f"{page}-{digest}.json"
-        cached = read_json(cache, None)
+        cached = None if force else read_json(cache, None)
         if isinstance(cached, list) and len(cached) == len(paras):
             for i, text in enumerate(cached):
                 self._say({"type": "para", "i": i, "text": text})
@@ -728,6 +892,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._say({"type": "error", "message": errors[0]})
         cache.parent.mkdir(parents=True, exist_ok=True)
         write_json(cache, out)
+        if force and whole and len(paras) == 1 and at is not None and at < len(whole) and whole[at] == paras[0] and out[0]:
+            page_cache = TRANSLATE_DIR / book_hash(key) / f"{page}-{_para_digest(whole)}.json"
+            full = read_json(page_cache, None)
+            if isinstance(full, list) and len(full) == len(whole):
+                full[at] = out[0]
+                write_json(page_cache, full)
         self._say({"type": "done"})
 
     def _run_translate(self, title, page, paras, on_para, cancel):
@@ -820,7 +990,7 @@ class Handler(SimpleHTTPRequestHandler):
                 {"role": "assistant", "text": answer, "at": now, **({"interrupted": error} if error else {})},
             ]
             with data_lock:
-                save_turn(key, cid, msgs, session)
+                saved_cid = save_turn(key, cid, msgs, session)
                 # 问的是一条划线时，在划线记录上标「问过」，导图据此给节点加外圈
                 hls = read_json(HIGHLIGHTS, {})
                 hit = hit_of(hls, key, sel)
@@ -829,7 +999,11 @@ class Handler(SimpleHTTPRequestHandler):
                     write_json(HIGHLIGHTS, hls)
             if error:  # 出错前已有半截回答：存了，并让页面标明不完整
                 self._say({"type": "interrupted", "message": error})
-            self._say({"type": "done"})
+            self._say({"type": "done", "at": now, "cid": saved_cid})  # at、cid：这一轮存盘的时间和落进的对话，页面凭它们认出这一轮（删单条问答）
+            fire_after_turn({
+                "file": key, "title": ask_titles.get(key) or _title_of(key), "question": question, "answer": answer, "page": page,
+                "quote": quote, "at": now, "cid": saved_cid, "interrupted": error or None,
+            })
         finally:
             ask_inflight.pop(key, None)
             ask_titles.pop(key, None)
@@ -874,15 +1048,17 @@ class Handler(SimpleHTTPRequestHandler):
                "--strict-mcp-config", "--allowedTools", ALLOWED_TOOLS, "--disallowedTools", DENIED_TOOLS]
         if session:
             cmd += ["--resume", session]
-        env = _claude_env(READER_DATA=str(DATA))  # hook 按这个找阅读状态；沙盒实例时指向沙盒目录
+        # hook 按这两个找阅读状态和读者档案；沙盒实例时指向沙盒目录。显式传，不靠 hook 继承服务进程的环境
+        env = _claude_env(READER_DATA=str(DATA), READER_LEARNER=str(LEARNER))
         env.pop("READER_CONTEXT", None)
         if ctx_env:
             env["READER_CONTEXT"] = ctx_env
         parts = []
-        # 模型偶尔在思考或调用工具前先吐一个一两个字的文本块（实测出现过「um」「е」），正文在后面。
-        # 文本块先扣住前几个字：超过 SHORT 个字就开始逐字推送；整块都很短就等下一块，
-        # 下一块是思考或工具调用则丢掉，是正文则照常补发。
-        SHORT = 4
+        # 模型偶尔在思考或调用工具前先吐一小段文本块：一两个字的杂字（实测出现过「um」「е」），或「的Read the image.」这样的半句自言自语，
+        # 正文在后面。文本块先扣住：超过 HOLD 个字（去掉首尾空白算）或带换行才开始逐字推送；整块都没超过就等下一块，
+        # 下一块是思考或工具调用则丢掉，是正文则照常补发；整个回答就这么短（比如「好的」）也照常给。
+        # 超过 HOLD 字或分了行的，是真在讲解，哪怕后面跟着工具调用也留着
+        HOLD = 40
         block = None       # 当前文本块里还没推送的字；None 表示当前不是文本块
         streaming = False  # 当前文本块是否已经开始推送
         pending = ""       # 已结束、还没决定去留的短文本块
@@ -903,7 +1079,8 @@ class Handler(SimpleHTTPRequestHandler):
                 commit(text, False)
             else:
                 block += text
-                if len(block.strip()) > SHORT:
+                held = block.strip()
+                if len(held) > HOLD or "\n" in held:
                     commit(block, True)
                     streaming = True
 
@@ -951,6 +1128,8 @@ class Handler(SimpleHTTPRequestHandler):
         flush_held()
         if pending:
             commit(pending, True)  # 整个回答就这么短（比如「好的」），照常给
+        elif block is not None and not streaming and block.strip():
+            commit(block, True)  # 流在文本块中间断了（出错、超时），扣着的这一小段也是回答的一部分
         return "".join(parts).strip(), session, error
 
 
@@ -990,8 +1169,29 @@ def quote_of(sel, hit):
     return quote
 
 
+def archive_current(chats, key):
+    """把这本书的当前对话收进历史：从 chats 里拿掉，追加到存档文件。调用方持有 data_lock，并负责把 chats 写回。
+    返回收进去的那一段；当前对话里没有消息时什么都不存、返回 None"""
+    old = chats.pop(key, None) or {}
+    msgs = old.get("messages") or []
+    if not msgs:
+        return None
+    first = next((m.get("text", "") for m in msgs if m.get("role") == "user"), "")
+    conv = {
+        "id": old.get("cid") or new_cid(), "title": " ".join(first.split())[:40] or "（没有提问）",
+        "startedAt": msgs[0].get("at"), "endedAt": msgs[-1].get("at"),
+        "count": sum(1 for m in msgs if m.get("role") == "user"),
+        "session": old.get("session"), "messages": msgs,
+    }
+    CHAT_ARCHIVE.mkdir(parents=True, exist_ok=True)
+    convs = read_json(archive_path(key), [])
+    convs.append(conv)
+    write_json(archive_path(key), convs)
+    return conv
+
+
 def save_turn(key, cid, msgs, session):
-    """存一轮问答。cid 是开问时这段对话的身份；回答期间对话被另一个窗口收进历史了，
+    """存一轮问答，返回它落进的那段对话的 id。cid 是开问时这段对话的身份；回答期间对话被另一个窗口收进历史了，
     就补进那一段，不动新对话（否则这一问成了新对话的第一条，还把新对话接回旧的 Claude 会话）。调用方持有 data_lock"""
     chats = read_json(CHATS, {})
     entry = chats.get(key)
@@ -1001,7 +1201,7 @@ def save_turn(key, cid, msgs, session):
         entry["session"] = session
         entry["messages"] += msgs
         write_json(CHATS, chats)
-        return
+        return entry["cid"]
     convs = read_json(archive_path(key), [])
     conv = next((c for c in convs if c.get("id") == cid), None) if cid else None
     if conv is None:
@@ -1014,6 +1214,38 @@ def save_turn(key, cid, msgs, session):
     conv["session"] = session
     CHAT_ARCHIVE.mkdir(parents=True, exist_ok=True)
     write_json(archive_path(key), convs)
+    return conv["id"]
+
+
+# ---------- 一轮问答落盘之后的回调：功能模块用 ctx.after_turn(fn) 登记 ----------
+AFTER_TURN = []
+
+
+def after_turn(fn):
+    """登记回调 fn(turn)：每一轮问答存盘、页面收到 done 之后，为每个回调起一个守护线程调用，互不等待。
+    turn = {file, title, question, answer, page, quote, at, cid, interrupted}（interrupted 是出错原因，正常答完为 None）。
+    回调抛什么都只记日志，不影响回答和别的回调；每个回调拿到的是自己的一份拷贝；要读写数据文件先拿 ctx.data_lock"""
+    if not callable(fn):
+        raise TypeError("after_turn 要传一个可调用对象")
+    AFTER_TURN.append(fn)
+    return fn
+
+
+def _run_after_turn(fn, turn):
+    try:
+        fn(turn)
+    except Exception:  # noqa: BLE001 回调是别的模块写的，任何错误只记日志
+        print(f"after_turn 回调 {getattr(fn, '__qualname__', fn)} 出错：", file=sys.stderr, flush=True)
+        traceback.print_exc()
+        sys.stderr.flush()
+
+
+def fire_after_turn(turn):
+    for fn in list(AFTER_TURN):
+        try:
+            threading.Thread(target=_run_after_turn, args=(fn, copy.deepcopy(turn)), daemon=True).start()
+        except Exception:  # noqa: BLE001 起线程、拷贝失败也不能连累这一轮问答
+            traceback.print_exc()
 
 
 def valid_attachments(items):
@@ -1190,6 +1422,8 @@ def load_features():
         ROOT=ROOT, DATA=DATA, STATE=STATE, PROGRESS=PROGRESS, HIGHLIGHTS=HIGHLIGHTS, CHATS=CHATS,
         read_json=read_json, write_json=write_json, now_iso=now_iso, book_hash=book_hash,
         data_lock=data_lock, claude_once=claude_once, ocr_cache=ocr_cache,
+        LEARNER=LEARNER, CHAT_ARCHIVE=CHAT_ARCHIVE, archive_path=archive_path, title_of=_title_of, after_turn=after_turn,
+        quarantine=_quarantine, read_json_as=read_json_as,
     )
     for f in sorted((ROOT / "features").glob("*.py")):
         if f.name.startswith("_"):
@@ -1209,6 +1443,9 @@ def main():
     shutil.rmtree(ASK_CONTEXT_DIR, ignore_errors=True)  # 上次服务被杀时没来得及删的提问快照
     load_features()
     (DATA / "log").mkdir(exist_ok=True)
+    # socketserver 的 listen 队列默认只有 5：页面一次并发请求几十个文件（功能模块 + 样式）时，多出来的连接会被直接重置，
+    # 控制台里就是随机几个「功能模块加载失败」。加到 128
+    ThreadingHTTPServer.request_queue_size = 128
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
     print(f"伴读：http://127.0.0.1:{PORT}/  claude={CLAUDE_BIN}", flush=True)

@@ -1,0 +1,50 @@
+/* 批注视图的「划线与眉批」：当前这本书的全部划线按页排开，每条下面一个框写自己的一句话。
+   全部规则收在 #view-notes 里，类名都以 nt- 开头，不碰别的模块。 */
+#view-notes {
+  .nt-empty { margin: 0; font: 400 14px/1.7 var(--song); color: var(--ink-3); }
+
+  .nt-row { position: relative; padding: 12px 0 14px; border-top: 1px solid var(--rule-soft); }
+  .nt-row:first-child { border-top: 0; padding-top: 2px; }
+  .nt-row.nt-flash { animation: nt-flash 1.8s ease-out; }
+  @keyframes nt-flash { 0%, 55% { background: var(--hl-past); box-shadow: 0 0 0 6px var(--hl-past); } }
+  @media (prefers-reduced-motion: reduce) { .nt-row.nt-flash { animation: none; } }
+
+  /* 页码在左，动作在右 */
+  .nt-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .nt-page { font: 400 12.5px/1.5 var(--song); letter-spacing: .04em; color: var(--ink-3); transition: color .15s; }
+  .nt-page:hover { color: var(--dian); }
+  .nt-acts { display: flex; gap: 12px; flex: none; }
+  .nt-acts button { font: 400 12.5px/1.5 var(--song); color: var(--ink-3); transition: color .15s; }
+  .nt-acts button:hover { color: var(--dian); }
+  .nt-acts button.danger:hover { color: var(--danger); }
+
+  /* 原文：荧光笔压在字上，超过三行折叠 */
+  .nt-quote { margin-top: 4px; }
+  .nt-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin: 0;
+    font: 400 14.5px/1.65 var(--latin); color: var(--ink); overflow-wrap: anywhere; }
+  .nt-row.open .nt-text { display: block; }
+  .nt-text mark { color: inherit; background: var(--hl-past); padding: .06em .1em; border-radius: 2px;
+    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  .nt-more { margin-top: 1px; font: 400 12px/1.5 var(--song); color: var(--dian); }
+  .nt-img { display: block; max-width: 100%; max-height: 120px; margin-top: 4px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi); }
+
+  /* 眉批：没写的时候是一行淡淡的框，点进去长高；写了的底色换成输入底，「批」字标变靛 */
+  .nt-note { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
+  .nt-tag { flex: none; margin-top: 7px; padding: 2px 2px 1px; border: 1px solid var(--rule); border-radius: 2px;
+    font: 400 12px/1 var(--song); color: var(--ink-3); transition: color .15s, border-color .15s; }
+  .nt-row.has-note .nt-tag, .nt-row:focus-within .nt-tag { color: var(--dian); border-color: var(--dian); }
+  .nt-field { position: relative; flex: 1; min-width: 0; }
+  .nt-ta { display: block; width: 100%; min-height: 34px; max-height: 18em; resize: none; field-sizing: content;
+    padding: 6px 9px; border: 1px solid var(--rule-soft); border-radius: 3px; background: transparent;
+    font: 400 14px/1.6 var(--song); color: var(--ink); overflow-wrap: anywhere; transition: border-color .15s, background-color .15s; }
+  .nt-ta::placeholder { color: var(--ink-3); }
+  .nt-row.has-note .nt-ta { background: var(--paper-hi); border-color: var(--rule); }
+  .nt-ta:hover { border-color: var(--ink-3); }
+  .nt-ta:focus { outline: 0; border-color: var(--dian); background: var(--paper-hi); min-height: 60px; }
+  .nt-row.saving .nt-ta { border-style: dashed; }
+  .nt-row.failed .nt-ta { border-color: var(--danger); }
+  .nt-state { position: absolute; right: 8px; bottom: 5px; font: 400 12px/1 var(--song); color: var(--dian); pointer-events: none; }
+  .nt-count { position: absolute; right: 8px; bottom: 5px; font: 400 12px/1 var(--song); color: var(--ink-3); pointer-events: none; }
+  .nt-err { margin: 6px 0 0 26px; font: 400 12.5px/1.5 var(--song); color: var(--danger); }
+  .nt-err button { color: var(--dian); text-decoration: underline; text-underline-offset: 3px; }
+}

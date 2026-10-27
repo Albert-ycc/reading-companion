@@ -1,0 +1,30 @@
+/* 参考文献角标：正文里的引用上标淡淡标出，点开是一张题录小卡片 */
+.textLayer span.ref-cite, .ref-hit {
+  background: oklch(0.348 0.07 259 / .09);
+  box-shadow: inset 0 -1.5px 0 oklch(0.348 0.07 259 / .5);
+  border-radius: 1px;
+}
+.textLayer span.ref-cite { cursor: pointer; transition: background .12s; }
+.textLayer span.ref-cite:hover, .textLayer span.ref-cite.ref-open { background: oklch(0.348 0.07 259 / .2); }
+/* 正文行里排着的 [124]：标记层不收鼠标事件（不能挡住拖选），悬停靠脚本判断 */
+.ref-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.ref-hit { position: absolute; transition: background .12s; }
+.ref-hit.ref-hover, .ref-hit.ref-open { background: oklch(0.348 0.07 259 / .2); }
+#viewer.ref-over .textLayer :is(span, br) { cursor: pointer; }
+
+#ref-pop { position: fixed; z-index: 16; box-sizing: border-box; width: min(400px, calc(100vw - 16px)); max-height: min(60vh, 460px);
+  overflow: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 7px;
+  box-shadow: 0 3px 14px oklch(0.3 0.03 83.6 / .16); }
+.rp-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px 11px; }
+.rp-item + .rp-item { border-top: 1px solid var(--rule-soft); }
+.rp-n { flex: none; margin-top: 3px; padding: 2px 4px 1px; font: 400 12px/1 var(--latin); color: var(--dian);
+  border: 1px solid currentColor; border-radius: 2px; font-variant-numeric: lining-nums; }
+.rp-body { min-width: 0; flex: 1; }
+.rp-text { margin: 0; font: 400 13px/1.6 var(--song); color: var(--ink); overflow-wrap: anywhere; user-select: text; }
+.rp-text.miss { color: var(--ink-3); }
+.rp-text a { color: var(--dian); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: oklch(0.348 0.07 259 / .45); }
+.rp-text a:hover { text-decoration-color: currentColor; }
+.rp-go { margin-top: 7px; padding: 4px 9px; font: 400 12px/1.2 var(--song); color: var(--ink-2);
+  background: var(--paper-hi); border: 1px solid var(--rule); border-radius: 3px; transition: border-color .15s, color .15s; }
+.rp-go:hover, .rp-go:focus-visible { border-color: var(--dian); color: var(--dian); }
+.rp-more { margin: 0; padding: 8px 14px 10px; border-top: 1px solid var(--rule-soft); font: 400 12px/1.5 var(--song); color: var(--ink-3); }

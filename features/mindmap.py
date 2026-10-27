@@ -1083,7 +1083,7 @@ def register(routes, ctx):
     # ---------- 「卡住」的概念 ----------
     def get_stuck(h, q):
         try:
-            text = (ctx.ROOT / "learner.md").read_text("utf-8")
+            text = (getattr(ctx, "LEARNER", None) or ctx.ROOT / "learner.md").read_text("utf-8")
         except OSError:
             return h._send_json({"concepts": []})
         out = []

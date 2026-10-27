@@ -2,7 +2,7 @@
 // 每本书一个对话，换书自动切换；「新对话」清掉这本书的上下文。
 import { marked } from "./vendor/marked.esm.js";
 import { currentBook, removeHighlight, readingContext, revealHighlight, tidyText } from "./reader.js";
-import { $, toast, api, el } from "./ui.js";
+import { $, toast, api, apiOk, whyFailed, el } from "./ui.js";
 import { showView, currentView } from "./panel.js";
 
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -27,9 +27,13 @@ const render = (md) => marked.parse(cjkSafe(md));
 const box = $("#messages");
 const input = $("#q");
 let scopeKey = "";
+let curCid = null; // 当前这段对话的 id（/api/chat 给的）：删单条问答时带上，服务端发现对话已经换了就不删
 let loadSeq = 0; // 每次 loadChat 加一；慢响应回来时发现自己过期了就丢掉，免得上一本书的对话铺进这一本
 
-const scope = () => currentBook() || { key: "", title: "" };
+// 书架开着（#library 没藏）时问的是「全库」：对话栏用 file 为空串的那一段对话，不带任何书的上下文；
+// 书里问的是这本书，哪怕书还开在后台。showLibrary 时切到全库，book-opened 时切回那本书
+export const LIBRARY_TITLE = "全部读过的书";
+const scope = () => (!$("#library").hidden ? { key: "", title: LIBRARY_TITLE } : currentBook() || { key: "", title: "" });
 
 // 本地服务没在运行时给的办法，和离线页（sw.js）是同一行
 const RESTART = "launchctl kickstart -k gui/$(id -u)/com.albert.reading-companion";
@@ -122,13 +126,55 @@ function unmount(t) {
   if (g?.classList.contains("qa") && !g.querySelector(".msg.user")) g.remove();
 }
 
-// 一段对话（当前的或历史里的）的全部消息按组画进对话栏：回答跟着它前面那一问走
-function paintMessages(messages) {
+// 一段对话（当前的或历史里的）的全部消息按组画进对话栏：回答跟着它前面那一问走。
+// deletable：当前对话里每一问悬停时右上角出「删除」（历史里只读，不给）
+function paintMessages(messages, deletable = false) {
   let into = box;
   for (const m of messages) {
     if (m.role === "user") into = holder(m.quote && typeof m.quote === "object" ? m.quote : null);
-    bubble(m.role, m.text, m.attachments || [], m.interrupted, into);
+    const node = bubble(m.role, m.text, m.attachments || [], m.interrupted, into);
+    if (deletable && m.role === "user" && typeof m.at === "string" && m.at) node.append(deleteButton(m.at));
   }
+}
+
+// ---------- 删除单条问答 ----------
+// 按提问那条消息的 at 认（同一轮的问和答在服务端是挨着的两条）。删完立刻生效，提示条里 6 秒内可以「撤销」写回；
+// 只从伴读的记录里删，Claude 自己的会话里这一轮仍在。字用伪元素写（index.html 的 .turn-del::after），不进 textContent
+function deleteButton(at) {
+  return el("button", { type: "button", className: "turn-del", ariaLabel: "删除这一问一答", title: "只从记录里删，Claude 这段会话里还记得", onclick: () => deleteTurn(at) });
+}
+
+async function reloadKeepingScroll() {
+  const top = box.scrollTop;
+  await loadChat();
+  box.scrollTop = Math.min(top, box.scrollHeight);
+}
+
+async function deleteTurn(at) {
+  if (viewing !== null) return;
+  if (busyHere()) return void toast("Claude 还在回答，答完再删");
+  const key = scopeKey;
+  let res;
+  try {
+    res = await apiOk("/api/chat/delete", { file: key, at, cid: curCid || undefined });
+  } catch (err) {
+    return void toast("没删掉：" + whyFailed(err, "再试一次"), undefined, 5000);
+  }
+  if (key !== scopeKey) return; // 等服务端回话时换了书：删是删了，界面已经是另一本
+  await reloadKeepingScroll();
+  if (!res.removed) return void toast("这一问已经不在记录里了");
+  toast("已从记录里删掉这一问一答（Claude 这段会话里还记得）", { label: "撤销", run: () => undoDelete(key, res) });
+}
+
+async function undoDelete(key, res) {
+  if (key !== scopeKey) return void toast("已经换了一本书，撤销不了了");
+  try {
+    await apiOk("/api/chat/restore-turn", { file: key, cid: res.cid || undefined, index: res.index, messages: res.messages });
+  } catch (err) {
+    return void toast("没能撤销：" + whyFailed(err, "再试一次"), undefined, 5000);
+  }
+  if (key === scopeKey && viewing === null) await reloadKeepingScroll();
+  toast("已放回");
 }
 
 function nearBottom() {
@@ -160,6 +206,7 @@ export async function loadChat() {
   if (turn?.phase === "error" && turn.restored && turn.key !== key) unrestore(turn);
   scopeKey = key;
   $("#pi-book").textContent = title || "";
+  syncChips();
   box.replaceChildren();
   const started = Date.now();
   let chat, failed = null;
@@ -169,9 +216,10 @@ export async function loadChat() {
   } catch (err) { failed = err; }
   if (seq !== loadSeq) return;
   const { messages = [], inflight = null } = (!failed && chat) || {};
+  curCid = (!failed && chat?.cid) || null;
   // 等响应的这段时间里这一问恰好答完存盘：这份响应可能是存盘前取的，再取一次
   if (turn?.key === key && turn.phase === "done" && turn.doneAt >= started) return loadChat();
-  paintMessages(messages);
+  paintMessages(messages, true);
   rounds = messages.filter((m) => m.role === "user").length;
   if (rounds >= LONG_ROUNDS) box.append(longNote());
   // 这一页自己发出的提问（进行中或出错）还没存进服务端，得从内存里接回来
@@ -184,7 +232,8 @@ export async function loadChat() {
   if (failed) box.append(loadFailedNote(failed));
   else if (!messages.length && !live && ghost?.key !== key) {
     box.append(el("div", { className: "msg hint" },
-      title ? "在左边选中一段就是划线，然后在这里问。按住 ⌥ 拖一个框，能把图、表、公式发给 Claude；⌘V 能贴截图。没划线时，问的是当前这一页。" : "还没打开书时也能直接问 Claude。"));
+      key === "" && title ? "书架上提问，问的是你读过的所有书，不对着哪一页。打开一本书再问，问的就是那本书。"
+        : title ? "在左边选中一段就是划线，然后在这里问。按住 ⌥ 拖一个框，能把图、表、公式发给 Claude；⌘V 能贴截图。没划线时，问的是当前这一页。" : "还没打开书时也能直接问 Claude。"));
   }
   box.scrollTop = box.scrollHeight;
   syncBusy();
@@ -212,6 +261,7 @@ export function addAttachment(a) {
     toast(`最多附 ${MAX_ATTACHMENTS} 张图，这张没附上`);
     return false;
   }
+  a.book = scopeKey; // 属于哪本书：换书时没发出去的附图要清掉（见下面的 book-opened）
   pending.push(a);
   renderAttachments();
   input.focus();
@@ -235,9 +285,10 @@ export const answering = busy; // 划线预测用：Claude 正在答题时不猜
 const busyHere = () => running()?.key === scopeKey;
 const shortTitle = (t) => (t.length > 18 ? t.slice(0, 18) + "…" : t);
 const nameOf = (r) => (r.title ? `《${shortTitle(r.title)}》` : "另一本书");
+const about = (r) => (r.key === "" ? "书架上的全库提问" : `${nameOf(r)}里的提问`); // 另一处在答的是哪一问：全库那段的 key 是空串
 const busyHint = () => {
   const r = running();
-  return !r || r.key === scopeKey ? "Claude 还在回答，答完再发" : `Claude 还在回答${nameOf(r)}里的提问，答完再发`;
+  return !r || r.key === scopeKey ? "Claude 还在回答，答完再发" : `Claude 还在回答${about(r)}，答完再发`;
 };
 
 let foreign = null; // 别的书的提问还没答完时，在这本书的对话栏末尾说明为什么发不出去
@@ -252,7 +303,7 @@ function syncBusy() {
   const need = r && r.key !== scopeKey && viewing === null;
   if (!need) { foreign?.remove(); foreign = null; return; }
   if (foreign?.isConnected) return;
-  foreign = el("div", { className: "msg note", textContent: `Claude 还在回答${nameOf(r)}里的提问，答完才能在这里发问。` });
+  foreign = el("div", { className: "msg note", textContent: `Claude 还在回答${about(r)}，答完才能在这里发问。` });
   const hint = box.querySelector(".msg.hint"); // 空对话的提示笺下面垫着一大块留白，说明放它上面
   if (hint) hint.before(foreign); else box.append(foreign);
   box.scrollTop = hint ? 0 : box.scrollHeight;
@@ -421,6 +472,8 @@ async function run(t) {
           break read;
         } else if (ev.type === "done") {
           gotDone = true;
+          if (typeof ev.at === "string") t.at = ev.at; // 这一轮存盘的时间：答完后给它挂上「删除」
+          if (typeof ev.cid === "string" && t.key === scopeKey) curCid = ev.cid;
         }
       }
     }
@@ -435,6 +488,7 @@ function finish(t) {
   t.phase = "done";
   t.doneAt = Date.now();
   paintNow(t);
+  if (t.at && t.user?.isConnected && viewing === null && !t.user.querySelector(".turn-del")) t.user.append(deleteButton(t.at));
   // 答完时人在别的书里：轮数是那本书的，不能记到这里
   if (t.key === scopeKey && viewing === null) {
     rounds++;
@@ -562,8 +616,28 @@ input.addEventListener("keydown", (e) => {
     $("#ask").requestSubmit();
   }
 });
+// 快捷按钮：书里是三句对着「Claude 看到」的那一段问的话；书架上（全库）换成三颗全库用的。
+// fill 的只填进输入框、光标停在末尾，让人把话补完再发（compose）；其余点了就发
+const BOOK_CHIPS = [{ text: "这段什么意思" }, { text: "举个例子" }, { text: "和我的工作有什么关系" }];
+const LIBRARY_CHIPS = [
+  { text: "我最近在读什么" },
+  { text: "我在哪本书里问过……", fill: "我在哪本书里问过" }, // 省略号是提示「接着往下写」，填进去的不带它
+  { text: "两本书对同一件事的说法有什么不同", fill: "两本书对同一件事的说法有什么不同" },
+];
+let chipsFor = null;
+function syncChips() {
+  const lib = !$("#library").hidden;
+  if (chipsFor === lib) return;
+  chipsFor = lib;
+  $("#chips").replaceChildren(...(lib ? LIBRARY_CHIPS : BOOK_CHIPS).map((c) => {
+    const b = el("button", { type: "button", textContent: c.text });
+    if (c.fill) { b.dataset.fill = c.fill; b.title = "填进输入框，补完再发"; }
+    return b;
+  }));
+}
 $("#chips").addEventListener("click", (e) => {
-  if (e.target.tagName === "BUTTON") ask(e.target.textContent);
+  if (e.target.tagName !== "BUTTON") return;
+  if (e.target.dataset.fill) compose(e.target.dataset.fill); else ask(e.target.textContent);
 });
 $("#chat-reset").addEventListener("click", async () => {
   if (busyHere()) return void toast("Claude 还在回答，答完再开新对话");
@@ -607,9 +681,11 @@ async function showHistoryList() {
   const list = failed
     ? [el("p", { className: "hist-empty" }, isDown(failed) ? "伴读的本地服务没在运行，历史对话暂时取不到。" : "历史对话没取到：" + failed.message, ...(isDown(failed) ? [el("br"), ...restartHelp("点一次「历史」")] : []))]
     : items.length
-      ? items.map((c) => el("button", { type: "button", className: "hist-item", onclick: () => showArchived(c.id) },
-          el("span", { className: "hist-title", textContent: c.title }),
-          el("span", { className: "hist-meta", textContent: `${fmt(c.startedAt)} · 问了 ${c.count} 次` })))
+      ? items.map((c) => el("div", { className: "hist-row" },
+          el("button", { type: "button", className: "hist-item", onclick: () => showArchived(c.id) },
+            el("span", { className: "hist-title", textContent: c.title }),
+            el("span", { className: "hist-meta", textContent: `${fmt(c.startedAt)} · 问了 ${c.count} 次` })),
+          el("button", { type: "button", className: "hist-resume", textContent: "接着聊", title: "把这段放回当前对话，Claude 也接着这段的上下文往下聊", onclick: () => resumeConversation(c.id) })))
       : [el("p", { className: "hist-empty", textContent: "还没有历史对话。点「新对话」时，当前这段会收到这里，不会删掉。" })];
   box.replaceChildren(head, ...list);
   box.scrollTop = 0;
@@ -627,6 +703,7 @@ async function showArchived(id) {
   const head = el("div", { className: "hist-head" },
     el("span", {}, el("b", { textContent: "历史对话" }), el("span", { className: "hist-sub", textContent: `${fmt(c.startedAt)} · 问了 ${c.count} 次 · 只读` })),
     el("span", { className: "hist-tools" },
+      el("button", { type: "button", textContent: "接着聊", title: "把这段放回当前对话，Claude 也接着这段的上下文往下聊", onclick: () => resumeConversation(id) }),
       el("button", { type: "button", textContent: "‹ 列表", onclick: showHistoryList }),
       el("button", { type: "button", textContent: "回到当前对话", onclick: loadChat })));
   box.replaceChildren(head);
@@ -634,9 +711,39 @@ async function showArchived(id) {
   box.scrollTop = 0;
 }
 
+// 把一段历史对话放回当前对话：服务端把存档里那段换成当前、Claude 的会话也接上；当前对话已有内容就先收进历史
+async function resumeConversation(id) {
+  if (busyHere()) return void toast("Claude 还在回答，答完再接着聊旧的对话");
+  let r;
+  try {
+    r = await apiOk("/api/chat/restore", { file: scopeKey, id });
+  } catch (err) {
+    if (isDown(err)) return downNote("没能接上这段对话");
+    return void toast("没能接着聊：" + whyFailed(err, "再试一次"), undefined, 5000);
+  }
+  if (turn?.phase === "error" && turn.key === scopeKey) turn = null; // 失败的那一问属于刚收起的对话
+  await loadChat();
+  toast(r.already ? "这段已经是当前对话了" : r.archived ? "已接上这段旧对话，刚才那段收进了「历史」" : "已接上这段旧对话");
+}
+
 $("#chat-history").addEventListener("click", () => (viewing ? loadChat() : showHistoryList()));
 
 window.addEventListener("book-opened", loadChat);
+// 回到书架：对话栏换成「全库」那段对话（启动时 app.js 自己会 loadChat，这里只管从书里回来）
+window.addEventListener("library-shown", () => { if (scope().key !== scopeKey) loadChat(); });
+// 换了书：没发出去的附图是上一本书里截的，不带过来（loadChat 的同步部分已先跑，失败的那一问放回去的图归它自己管，不在这里清）。
+// 同一本书重新打开不算换书；清掉的图也从服务端删掉
+window.addEventListener("book-opened", (e) => {
+  const gone = pending.filter((a) => a.book !== e.detail?.key);
+  if (!gone.length) return;
+  for (const a of gone) {
+    pending.splice(pending.indexOf(a), 1);
+    a.removed = true;
+    api("/api/attachment/delete", { path: a.path }).catch(() => {});
+  }
+  renderAttachments();
+  toast("换了书，没发出去的附图已清掉");
+});
 // 快捷问题问的是「Claude 看到」的那一句，只在问答视图里有对象
 window.addEventListener("view-changed", () => { $("#chips").hidden = currentView() !== "chat"; });
 

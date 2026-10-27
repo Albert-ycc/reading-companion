@@ -1,10 +1,11 @@
 // 框选提问 + 粘贴截图。
 // 框选：按住 ⌥ 在书页上拖出一个框（或点版心的「框选」再拖一次），松手后从 PDF 原件把这块重新渲染成高清图，
 // 当作一条划线交给 Claude 看；表格、统计公式、扫描页上的图，文字划线划不了的都靠它。
+// 框好之后，框旁边多一个「识别成表格」：让 Claude 把框里的表格读成 Markdown 表 / CSV，可复制、可放进提问框。
 // 粘贴截图：在输入框（或页面空白处）⌘V，图缩到合适大小存到本地服务，随下一次提问带走。
 import { $, el, toast, api } from "./ui.js";
-import { getPdf, currentBook, surfaceAt, addHighlight, removeHighlight, syncState, isScanned } from "./reader.js";
-import { addAttachment, canAttach } from "./chat.js";
+import { getPdf, currentBook, surfaceAt, addHighlight, removeHighlight, syncState, isScanned, pageDiv as pageDivOf } from "./reader.js";
+import { addAttachment, canAttach, compose } from "./chat.js";
 
 const MIN_W = 28, MIN_H = 18;        // 屏幕上比这还小的框当成误触
 const TARGET_W = 1400;                // 区域图的目标宽度，Claude 读小字够用
@@ -21,6 +22,7 @@ let altDown = false;
 let pointerIn = false;
 let drag = null;      // 正在拖的框
 let busy = false;     // 正在取图、上传
+let card = null;      // 框旁边的「识别成表格」小卡（见文件末尾「识别成表格」一节）
 
 // ---------- 入口：版心按钮 + 悬浮提示 ----------
 // 版心里的按钮：index.html 里已经有就直接用，没有就在「中英对照」后面插一个
@@ -38,7 +40,7 @@ $("#left").append(hint);
 
 function refresh() {
   const open = !!getPdf() && !viewer.hidden;
-  if (!open) armed = false;
+  if (!open) { armed = false; closeCard(); }
   btn.hidden = !open;
   const hot = open && !busy && !!(drag || armed || (altDown && pointerIn));
   document.body.classList.toggle("region-on", hot);
@@ -298,6 +300,7 @@ async function commit(pageDiv, rect) {
     syncState({ page: n }).catch(() => {});
     $("#q").focus();
     toast(`已框选第 ${n} 页这一块，Claude 能看到了，直接问吧`, { label: "撤销", run: () => removeHighlight(hl) });
+    openCard({ book: book.key, page: n, box, image: saved.path, hl });
   } catch (err) {
     toast("框选没成功：" + zh(err, "再框一次试试"));
   }
@@ -366,4 +369,226 @@ document.addEventListener("paste", (e) => {
     }
     if (allOk) toast("截图已附上，写上问题再发送（直接发送也行）");
   })();
+});
+
+// ---------- 识别成表格 ----------
+// 框好之后，框旁边出一个「识别成表格」小标签；点了变成一张浮层卡：识别中（可取消）→ 表格预览 + 复制 Markdown / 复制 CSV / 插到问题里。
+// 卡片跟着框走（量页上画出来的那块框的位置），框滚出阅读区就停在阅读区右下角。
+// 一次只留一张卡：框新的一块、换书、回书架都会收掉旧的，识别到一半收卡会掐掉请求，服务端随即杀掉 claude。
+// state：chip 小标签 / busy 识别中 / result 有表 / none 框里没有表 / error 失败
+const CHIP_MS = 20000;        // 小标签不点就收起来
+const CLIENT_LIMIT_MS = 110000; // 服务端 90 秒超时，这里多留一点，服务没回话也不会一直转
+
+const btn2 = (label, cls, onclick, title) => el("button", { type: "button", className: "rc-btn" + (cls ? " " + cls : ""), textContent: label, title: title || "", onclick });
+
+function openCard({ book, page, box, image, hl }) {
+  closeCard();
+  const node = el("div", { id: "region-card", className: "region-card", tabIndex: -1 });
+  node.setAttribute("aria-live", "polite");
+  node.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    closeCard();
+    $("#q").focus();
+  });
+  const hold = (on) => { if (card?.node === node) { card.hold = on; armFade(); } };
+  node.addEventListener("pointerenter", () => hold(true));
+  node.addEventListener("pointerleave", () => hold(false));
+  node.addEventListener("focusin", () => hold(true));
+  node.addEventListener("focusout", () => hold(false));
+  $("#left").append(node);
+  card = { state: "chip", book, page, box, image, hl, node, hold: false, job: null, timer: 0, fade: 0, result: null, error: "", t0: 0 };
+  paintCard();
+  armFade();
+}
+
+function closeCard() {
+  if (!card) return;
+  const c = card;
+  card = null;
+  c.job?.abort();
+  clearInterval(c.timer);
+  clearTimeout(c.fade);
+  c.node.remove();
+}
+
+// 小标签 20 秒不点就收；鼠标停在上面或焦点在里面时不收
+function armFade() {
+  const c = card;
+  if (!c) return;
+  clearTimeout(c.fade);
+  if (c.state === "chip" && !c.hold) c.fade = setTimeout(() => { if (card === c && c.state === "chip" && !c.hold) closeCard(); }, CHIP_MS);
+}
+
+function paintCard() {
+  const c = card;
+  if (!c) return;
+  const n = c.node;
+  clearInterval(c.timer);
+  const hadFocus = n.contains(document.activeElement);
+  n.className = "region-card " + (c.state === "chip" ? "chip" : "panel");
+  const head = (title, meta) => el("div", { className: "rc-head" },
+    c.state === "busy" ? el("span", { className: "rc-dot" }) : "", el("b", { className: "rc-title" }, title), meta ? el("span", { className: "rc-meta" }, meta) : "");
+  const acts = (...b) => el("div", { className: "rc-acts" }, ...b);
+  const quiet = (label) => btn2(label, "rc-quiet", closeCard);
+  if (c.state === "chip") {
+    n.replaceChildren(btn2("识别成表格", "rc-go", recognize, "让 Claude 把框里的表格读成 Markdown 表 / CSV"));
+  } else if (c.state === "busy") {
+    const sec = el("span", { className: "rc-meta" });
+    n.replaceChildren(head("识别中…", sec), el("p", { className: "rc-note" }, "Claude 在读这块里的表格，一般十几秒，大表更久。"), acts(btn2("取消", "", closeCard)));
+    const tick = () => { sec.textContent = `已 ${Math.floor((Date.now() - c.t0) / 1000)} 秒`; };
+    tick();
+    c.timer = setInterval(tick, 1000);
+  } else if (c.state === "result") {
+    const { rows, markdown, csv, tsv, note } = c.result;
+    const cols = rows[0].length;
+    const table = el("table", { className: "rc-table" },
+      el("thead", {}, el("tr", {}, ...rows[0].map((t) => el("th", {}, t)))),
+      el("tbody", {}, ...rows.slice(1).map((r) => el("tr", {}, ...r.map((t) => el("td", {}, t))))));
+    n.replaceChildren(
+      head("识别出一张表", `${rows.length} 行 × ${cols} 列`),
+      el("div", { className: "rc-wrap", tabIndex: 0 }, table),
+      note ? el("p", { className: "rc-note" }, note) : "",
+      acts(
+        btn2("复制 Markdown", "solid", () => copyText(markdown, `Markdown 表（${rows.length} 行 × ${cols} 列）`)),
+        btn2("复制 CSV", "", () => copyText(csv, `CSV（${rows.length} 行 × ${cols} 列）`)),
+        btn2("复制（粘到表格软件）", "", () => copyText(tsv, `表格（${rows.length} 行 × ${cols} 列，用制表符分列）`), "制表符分隔，Numbers / Excel 里直接粘就分列"),
+        btn2("插到问题里", "", () => insertIntoQuestion(markdown), "把 Markdown 表放进输入框，不发送"),
+        quiet("关闭")));
+  } else if (c.state === "none") {
+    n.replaceChildren(head("框里没有识别出表格"), el("p", { className: "rc-note" }, c.result.note || "Claude 没在这块里找到表格，框准一点再试。"),
+      acts(btn2("重新识别", "", recognize), quiet("关闭")));
+  } else {
+    n.replaceChildren(head("没识别出来"), el("p", { className: "rc-note" }, c.error), acts(btn2("再试一次", "", recognize), quiet("关闭")));
+  }
+  if (hadFocus) n.querySelector("button")?.focus({ preventScroll: true }); // 点按钮后整张卡重画，焦点别丢（Esc 才收得掉）
+  placeCard();
+}
+
+// 页上画出来的这块框的屏幕位置（中英对照时每一块里各画一份，只算露出来的那截；框整个在阅读区外就返回 null）
+function boxOnScreen(c) {
+  const div = pageDivOf(c.page);
+  if (!div) return null;
+  const cut = (a, b) => {
+    const r = { left: Math.max(a.left, b.left), right: Math.min(a.right, b.right), top: Math.max(a.top, b.top), bottom: Math.min(a.bottom, b.bottom) };
+    return r.right - r.left > 1 && r.bottom - r.top > 1 ? r : null;
+  };
+  const same = (h) => ["left", "top", "width", "height"].every((k, i) => Math.abs(parseFloat(h.style[k]) / 100 - c.box[i]) < 0.002);
+  let u = null;
+  for (const h of div.querySelectorAll(".hl.region")) {
+    if (!same(h)) continue;
+    let r = h.getBoundingClientRect();
+    const crop = h.closest(".crop");
+    if (crop) r = cut(r, crop.getBoundingClientRect());
+    r = r && cut(r, viewer.getBoundingClientRect());
+    if (r) u = u ? { left: Math.min(u.left, r.left), right: Math.max(u.right, r.right), top: Math.min(u.top, r.top), bottom: Math.max(u.bottom, r.bottom) } : r;
+  }
+  return u;
+}
+
+// 小标签贴在框右下角下方；卡片左边对齐框；下面放不下放上面；框不在视野里就停阅读区右下角
+function placeCard() {
+  const c = card;
+  if (!c) return;
+  const lr = $("#left").getBoundingClientRect(), n = c.node;
+  n.style.width = c.state === "chip" ? "" : Math.min(420, lr.width - 24) + "px";
+  const { width: w, height: h } = n.getBoundingClientRect();
+  const a = boxOnScreen(c);
+  let x = lr.right - w - 14, y = lr.bottom - h - 14;
+  if (a) {
+    const ay = a.bottom + 8 + h <= lr.bottom - 12 ? a.bottom + 8 : a.top - h - 8;
+    if (ay >= lr.top + 12) {
+      x = clamp(c.state === "chip" ? a.right - w : a.left, lr.left + 12, lr.right - w - 12);
+      y = ay;
+    }
+  }
+  n.style.left = Math.round(x - lr.left) + "px";
+  n.style.top = Math.round(y - lr.top) + "px";
+}
+
+let placeRaf = 0;
+const placeSoon = () => { if (card && !placeRaf) placeRaf = requestAnimationFrame(() => { placeRaf = 0; placeCard(); }); };
+viewer.addEventListener("scroll", placeSoon, { passive: true });
+window.addEventListener("resize", placeSoon);
+window.addEventListener("page-rendered", placeSoon);
+
+// 请求要能中途掐断（换书、点取消），ui.js 的 api() 不带 signal，这里自己发；失败原因都是给人看的中文
+async function postTable(image, signal) {
+  let res;
+  try {
+    res = await fetch("/api/region/table", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image }), signal });
+  } catch (err) {
+    throw err.name === "AbortError" ? err : new Error("伴读的本地服务没在运行");
+  }
+  try {
+    return await res.json();
+  } catch (err) {
+    throw err.name === "AbortError" ? err : new Error("本地服务回的内容读不懂");
+  }
+}
+
+async function recognize() {
+  const c = card;
+  if (!c || c.state === "busy") return; // 连点：识别中不再发第二个
+  const job = new AbortController();
+  Object.assign(c, { job, state: "busy", t0: Date.now(), error: "", result: null });
+  clearTimeout(c.fade);
+  paintCard();
+  let late = false;
+  const guard = setTimeout(() => { late = true; job.abort(); }, CLIENT_LIMIT_MS);
+  try {
+    const data = await postTable(c.image, job.signal);
+    if (card !== c || c.job !== job) return;
+    if (data?.error) throw new Error(data.error);
+    const ok = Array.isArray(data?.rows) && data.rows.length && Array.isArray(data.rows[0]) && typeof data.markdown === "string" && typeof data.csv === "string" && typeof data.tsv === "string";
+    if (data?.table === false) Object.assign(c, { state: "none", result: { note: typeof data.note === "string" ? data.note : "" } });
+    else if (ok) Object.assign(c, { state: "result", result: data });
+    else throw new Error("识别结果读不懂，再试一次");
+  } catch (err) {
+    if (card !== c || c.job !== job) return; // 卡已经收了或换成别的框
+    if (err.name === "AbortError" && !late) return;
+    Object.assign(c, { state: "error", error: late ? "等了很久还没有回音，再试一次" : zh(err, "再试一次") });
+  } finally {
+    clearTimeout(guard);
+  }
+  paintCard();
+}
+
+// 复制：优先 clipboard API，不行（没有焦点、权限被拒）退到 execCommand
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = el("textarea", { value: text });
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch {}
+    ta.remove();
+    if (!ok) return toast("复制没成功，可以点「插到问题里」，从输入框里复制", undefined, 4500);
+  }
+  toast(`已复制${what}`);
+}
+
+// 放进输入框、不发送；输入框里已经有字就接在后面，表后留一个空行，光标落在表下面接着打问题
+function insertIntoQuestion(markdown) {
+  const q = $("#q");
+  const cur = q.value.trimEnd();
+  compose((cur ? cur + "\n\n" : "") + markdown + "\n\n");
+  toast("表格放进输入框了，补上问题再发送");
+}
+
+window.addEventListener("book-opened", closeCard);
+// 框被删了（撤销、旧划线菜单）：还没出结果的卡跟着收；已经出了表的留着，表在手上，复制、插入都不依赖那张图
+window.addEventListener("highlight-removed", (e) => {
+  if (card && e.detail === card.hl && card.state !== "result") closeCard();
+});
+// 对已有的框选划线发起识别：旧划线的菜单可以发这个事件（detail 是那条划线）
+window.addEventListener("region-table", (e) => {
+  const hl = e.detail, book = currentBook();
+  const box = hl?.parts?.[0]?.rects?.[0];
+  if (!book || hl?.kind !== "region" || typeof hl.image !== "string" || !box) return;
+  openCard({ book: book.key, page: hl.page, box, image: hl.image, hl });
+  recognize();
 });

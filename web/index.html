@@ -97,6 +97,8 @@
   .hl { position: absolute; mix-blend-mode: multiply; pointer-events: none; z-index: 1; background: var(--hl-past);
     border-radius: 2px 3px 3px 2px; clip-path: polygon(0.5% 0, 100% 0, 99.5% 100%, 0 100%); }
   .hl.current { background: var(--hl-now); }
+  .hl.noted::after { content: ""; position: absolute; top: 0; right: 0; width: 0; height: 0; /* 眉批：首行右上角折起的一个小三角，靛色，压在划线的黄上 */
+    border-top: 9px solid var(--dian); border-left: 9px solid transparent; }
   .pangxian { position: absolute; width: 2px; background: var(--dian); border-radius: 1px; z-index: 1; pointer-events: none; }
   .ocr-badge { position: absolute; top: 10px; right: 10px; z-index: 3; display: flex; align-items: center; gap: 6px;
     padding: 4px 9px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
@@ -106,6 +108,12 @@
   .ocr-badge.failed { cursor: pointer; color: var(--danger); }
   .ocr-badge.failed::before { background: var(--danger); animation: none; }
   .ocr-badge.failed:hover { border-color: var(--danger); }
+  .ocr-badge.redo { cursor: pointer; opacity: .55; transition: opacity .15s, border-color .15s, color .15s; }
+  .ocr-badge.redo::before { display: none; } /* 识别完了，不再脉动 */
+  .page:hover .ocr-badge.redo, .ocr-badge.redo:focus-visible { opacity: 1; }
+  .ocr-badge.redo:hover { border-color: var(--dian); color: var(--dian); }
+  .ocr-badge.redo.busy { cursor: default; opacity: 1; }
+  .ocr-badge.redo.busy::before { display: block; }
   body.dragging #left { outline: 1px dashed var(--dian); outline-offset: -14px; }
 
   /* 中英对照：原图块 + 译文块 */
@@ -121,6 +129,11 @@
   .tr.pending::after { order: -1; }
   .tr.pending::before { opacity: .45; }
   .tr.error { color: var(--danger); font-size: 12px !important; }
+  .tr-redo { position: absolute; top: 0; right: 0; padding: 3px 7px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
+    font: 400 12px/1 var(--song); color: var(--ink-3); opacity: 0; transition: opacity .15s, border-color .15s, color .15s; user-select: none; }
+  .tr-redo::after { content: "重译"; }
+  .tr:hover .tr-redo, .tr-redo:focus-visible { opacity: 1; }
+  .tr-redo:hover { border-color: var(--dian); color: var(--dian); }
 
   /* ───────── 书架 ───────── */
   #library { position: absolute; inset: 0; overflow: auto; padding: 60px 48px 80px 56px; }
@@ -132,9 +145,9 @@
   .search svg { width: 17px; height: 17px; flex: none; fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
   #search { flex: 1; border: 0; outline: 0; background: transparent; font: 400 15px/1 var(--song); color: var(--ink); }
   #search::placeholder { color: var(--ink-3); }
-  .sec { margin: 0; font: 600 17px/24px var(--song); letter-spacing: .06em; color: var(--ink); }
+  #library .sec { margin: 0; font: 600 17px/24px var(--song); letter-spacing: .06em; color: var(--ink); }
   .sec-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 56px; }
-  .sec-row .sec small { margin-left: 10px; font: 400 13px/1 var(--song); letter-spacing: 0; color: var(--dian); }
+  #library .sec-row .sec small { margin-left: 10px; font: 400 13px/1 var(--song); letter-spacing: 0; color: var(--dian); }
   .btns { display: flex; gap: 10px; }
   .btn { font: 400 14px/1 var(--song); padding: 10px 14px; border-radius: 3px; border: 1px solid var(--rule);
     color: var(--ink); background: var(--paper-hi); transition: border-color .15s, color .15s, background .15s; }
@@ -208,6 +221,8 @@
   #desk .q mark { background: var(--hl-past); color: inherit; padding: 2px 0; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   #desk .acts { margin-top: auto; padding-top: 20px; display: flex; align-items: center; gap: 18px; }
   #desk .st { font: 400 13px/1 var(--song); color: var(--ink-3); }
+  #desk .desk-ext { margin-top: 14px; font: 400 13px/1.5 var(--song); color: var(--ink-3); }
+  #desk .desk-ext:empty { display: none; }
   #desk .rm { position: absolute; top: 10px; right: 10px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--rule);
     background: var(--paper-hi); color: var(--ink-3); font: 400 13px/20px var(--latin); opacity: 0; transition: opacity .15s; }
   #desk:hover .rm { opacity: 1; }
@@ -323,7 +338,8 @@
 
   /* ───────── 批注栏视图外壳（问答 · 导读 · 导图） ───────── */
   .pi-head h2:has(+ .tabs:not([hidden])) { display: none; } /* 有多个视图时标题让位给标签 */
-  .chat-tools { display: flex; gap: 8px; }
+  .chat-tools { display: flex; gap: 6px; }
+  .chat-tools .ghost { padding: 2px 6px; font-size: 13px; line-height: 20px; } /* 三个按钮（历史、新对话、反问）排紧一点，给标签留地方 */
   #chat-history.on { border-color: var(--dian); color: var(--dian); }
   /* 历史对话：列表和只读查看 */
   .hist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 4px 0 14px;
@@ -334,16 +350,34 @@
   .hist-sub { display: block; margin-top: 2px; font-size: 12px; }
   .hist-item { display: block; width: 100%; text-align: left; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); }
   .hist-item:hover .hist-title { color: var(--dian); }
+  .hist-row { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--rule-soft); }
+  .hist-row .hist-item { flex: 1; min-width: 0; width: auto; border-bottom: 0; }
+  .hist-resume { flex: none; padding: 6px 10px; border: 1px solid var(--rule); border-radius: 3px; background: var(--paper-hi); font: 400 13px/1 var(--song); color: var(--dian); transition: border-color .15s, background .15s; }
+  .hist-resume:hover { border-color: var(--dian); }
+  /* 每一问悬停时右上角出「删除」（鼠标在问或答上都出）；字用伪元素写，不进问题的 textContent */
+  .msg.user .turn-del { position: absolute; top: 0; right: 0; padding: 3px 8px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi);
+    font: 400 12px/1 var(--song); letter-spacing: 0; color: var(--ink-3); opacity: 0; transition: opacity .15s, border-color .15s, color .15s; white-space: normal; }
+  .msg.user .turn-del::after { content: "删除"; }
+  .msg.user:hover .turn-del, .msg.user:has(+ .msg.assistant:hover) .turn-del, .msg.user .turn-del:focus-visible { opacity: 1; }
+  .msg.user .turn-del:hover { color: var(--danger); border-color: var(--danger); }
   .hist-title { display: block; font: 400 15px/1.5 var(--song); color: var(--ink); }
   .hist-meta { display: block; margin-top: 2px; font: 400 12px/1.4 var(--song); color: var(--ink-3); }
   .hist-empty { font: 400 14px/1.7 var(--song); color: var(--ink-3); }
   .msg.note { padding-left: 0; font: 400 13px/1.7 var(--song); color: var(--ink-3); border-top: 1px dashed var(--rule); padding-top: 10px; }
-  .tabs { display: flex; gap: 22px; align-items: flex-end; }
-  .tab { position: relative; padding: 2px 0 6px; font: 400 16px/24px var(--song); letter-spacing: .04em; color: var(--ink-3); transition: color .15s; }
+  .pi-head .row { flex-wrap: nowrap; align-items: flex-start; gap: 8px; }
+  .tabs { display: flex; flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 2px 10px; align-items: flex-end; } /* 标签多到放不下就换行，不挤掉右边的「历史」「新对话」 */
+  .chat-tools { flex: none; }
+  .tab { position: relative; padding: 2px 0 6px; font: 400 15px/24px var(--song); letter-spacing: .02em; color: var(--ink-3); transition: color .15s; }
   .tab:hover { color: var(--ink); }
   .tab.on { color: var(--ink); font-weight: 600; }
   .tab.on::after { content: ""; position: absolute; left: -2px; right: -2px; bottom: 0; height: 3px; border-radius: 2px; background: var(--tenghuang); } /* 藤黄划线标出当前视图 */
   .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* 容器视图：批注、学习。.secs 是滚动容器，每个模块往里加一节（panel.js 的 registerSection） */
+  .secs { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 28px; }
+  .secs:empty::after { content: "这里还没有内容。"; display: block; padding: 20px 0; font: 400 14px/1.7 var(--song); color: var(--ink-3); }
+  .secs > .sec { margin: 0; padding: 18px 0 16px; border-bottom: 1px solid var(--rule-soft); font: 400 14px/1.7 var(--song); letter-spacing: 0; color: var(--ink); }
+  .secs > .sec:last-child { border-bottom: 0; }
+  .sec-h { margin: 0 0 10px; font: 600 15px/24px var(--song); letter-spacing: .04em; color: var(--dian); }
   #sees-quote .sees-img { display: block; max-width: 100%; max-height: 140px; border: 1px solid var(--rule); border-radius: 2px; background: var(--paper-hi); }
   /* 附图：输入框上方的缩略图 */
   .attach { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
@@ -482,6 +516,18 @@
   <link rel="stylesheet" href="/css/predict.css">
   <link rel="stylesheet" href="/css/guide.css">
   <link rel="stylesheet" href="/css/mindmap.css">
+  <!-- 261027 批次：批注、导出、学习、复述、勘误、术语、回顾、参考文献、对比、全库提问、反问 -->
+  <link rel="stylesheet" href="/css/notes.css">
+  <link rel="stylesheet" href="/css/export.css">
+  <link rel="stylesheet" href="/css/learn.css">
+  <link rel="stylesheet" href="/css/retell.css">
+  <link rel="stylesheet" href="/css/errata.css">
+  <link rel="stylesheet" href="/css/terms.css">
+  <link rel="stylesheet" href="/css/recap.css">
+  <link rel="stylesheet" href="/css/refs.css">
+  <link rel="stylesheet" href="/css/compare.css">
+  <link rel="stylesheet" href="/css/askall.css">
+  <link rel="stylesheet" href="/css/socratic.css">
   <script type="module" src="./app.js"></script>
 </body>
 </html>
