@@ -342,10 +342,11 @@
     background: var(--paper-hi); font: 400 15px/1.4 var(--song); color: var(--ink); outline: 0; }
   #pw-dialog input:focus { border-color: var(--dian); }
   #pw-dialog .pw-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-  /* 点一下已有划线时，旁边出的小菜单 */
-  #hl-menu { position: fixed; z-index: 15; background: var(--paper); border: 1px solid var(--rule); border-radius: 3px;
-    box-shadow: 0 2px 10px oklch(0.3 0.03 83.6 / .14); padding: 4px; }
-  #hl-menu button { display: block; padding: 7px 12px; font: 400 13px/1 var(--song); color: var(--ink); border-radius: 2px; }
+  /* 书页上的小工具栏：选完字浮在选区上方（「划线」），点旧划线时出在点击处（「问这句」「删除这条划线」） */
+  #hl-menu { position: fixed; z-index: 15; display: flex; background: var(--paper); border: 1px solid var(--rule); border-radius: 7px;
+    box-shadow: 0 3px 14px oklch(0.3 0.03 83.6 / .16); padding: 3px; }
+  #hl-menu button { padding: 7px 13px; font: 400 13px/1 var(--song); color: var(--ink); border-radius: 4px; white-space: nowrap; }
+  #hl-menu button + button { border-left: 1px solid var(--rule); border-radius: 0 4px 4px 0; }
   #hl-menu button:hover { background: var(--hl-past); }
 
   /* 以下为 pdf.js 4.10 官方 textLayer 样式（web/pdf_viewer.css 摘录），负责可选中的透明文字层 */

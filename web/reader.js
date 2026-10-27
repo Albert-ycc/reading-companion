@@ -550,7 +550,7 @@ function schedule() {
 
 // 收掉一页：在画的取消，画好的清空，页的宽高留着（滚动位置不动），下次进预渲染范围重新画。
 // 对照页只清原图块的像素，译文、文字层、页高都留着（它的高度随译文变，整个收了再画，上方的页一缩一涨，眼前的字会跳），
-// 翻回来整页重画一次再切回各块（refillCrops）。选区还压在这页上（正拖着选字、或划完留在页上还没双击）不收
+// 翻回来整页重画一次再切回各块（refillCrops）。选区还压在这页上（正拖着选字、或划完留在页上还没点「划线」）不收
 function drop(n) {
   const div = pageDivs[n - 1];
   if (!rendering.has(n)) return;
@@ -1048,11 +1048,12 @@ function mergeRects(rects) {
 }
 
 // 松开鼠标：书页外松手时把选区终点拉回最近的页。选区就留在页上（不记划线、Claude 也不换视线），
-// 点别处它就散掉；在它上面双击才出「划线」（选的是中文译文则是「问这句」），见 showSelectionMenu
+// 上方浮出「划线」工具栏（选的是中文译文则是「问这句」，见 showSelectionBar），点了才记；点别处选区和工具栏一起散掉
 function settleSelection() {
   const sel = getSelection();
   if (!pdf || sel.rangeCount === 0 || sel.isCollapsed) { lastUp = null; return; }
   clampFocus(sel);
+  showSelectionBar();
 }
 
 // 选区里文字的矩形（视口坐标）：书页文字只量文字层；中文译文是普通排版，直接取
@@ -1271,37 +1272,60 @@ function lookAt(hl) {
   }, (err) => toast("没能让 Claude 看到这段：" + whyFailed(err, "再试一次"), undefined, 5000));
 }
 
-// 书页旁的小菜单：双击留在页上的选区出「划线」（译文是「问这句」）；点一下已有的划线出「问这句」「删除这条划线」
+// 书页上的一条小工具栏（照 Claude 客户端选中文字的样子）：选完字浮在选区上方，出「划线」（译文是「问这句」）；
+// 点一下已有的划线时出在点击处下方，是「问这句」「删除这条划线」
 const hlMenu = el("div", { id: "hl-menu", hidden: true });
-hlMenu.addEventListener("mousedown", (e) => e.preventDefault()); // 点菜单不能把页上的选区点散、也不抢焦点
+hlMenu.addEventListener("mousedown", (e) => e.preventDefault()); // 点工具栏不能把页上的选区点散、也不抢焦点
 document.body.append(hlMenu);
+let barOn = false; // 工具栏现在是不是跟着选区（滚动时跟着走）
 function openMenu(x, y, buttons) {
+  barOn = false;
   hlMenu.replaceChildren(...buttons);
   hlMenu.hidden = false;
-  hlMenu.style.left = Math.min(x, window.innerWidth - 150) + "px";
-  hlMenu.style.top = Math.min(y + 14, window.innerHeight - 84) + "px";
+  hlMenu.style.left = Math.min(x, window.innerWidth - hlMenu.offsetWidth - 8) + "px";
+  hlMenu.style.top = Math.min(y + 14, window.innerHeight - hlMenu.offsetHeight - 8) + "px";
 }
-function hideHlMenu() { hlMenu.hidden = true; }
+function hideHlMenu() { barOn = false; hlMenu.hidden = true; }
 const menuBtn = (textContent, run) => el("button", { type: "button", textContent, onclick: () => { hideHlMenu(); run(); } });
 
-function showSelectionMenu(x, y) {
-  const range = getSelection().getRangeAt(0);
+// 选完字：工具栏跟着选区出来。只选中一个字不算划线（commitSelection 也不收），对话栏里的选区不管
+function showSelectionBar() {
+  const sel = getSelection();
+  if (sel.rangeCount === 0 || sel.isCollapsed || sel.toString().trim().length < 2) return;
+  const from = sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement;
+  if (!from?.closest("#viewer")) return;
+  const range = sel.getRangeAt(0);
   const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-  openMenu(x, y, [menuBtn(startEl?.closest(".tr") ? "问这句" : "划线", commitSelection)]);
+  hlMenu.replaceChildren(menuBtn(startEl?.closest(".tr") ? "问这句" : "划线", commitSelection));
+  barOn = true;
+  placeBar();
 }
+// 贴在选区第一行的上方、横向居中；上方放不下就放到选区下面；选区滚出阅读区就先收起，滚回来再出
+function placeBar() {
+  if (!barOn) return;
+  const sel = getSelection();
+  const rects = sel.rangeCount && !sel.isCollapsed ? selectionRects(sel.getRangeAt(0)) : [];
+  if (!rects.length) return hideHlMenu();
+  const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+  const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+  const vb = viewer.getBoundingClientRect();
+  hlMenu.hidden = false;
+  const w = hlMenu.offsetWidth, h = hlMenu.offsetHeight;
+  let y = top - h - 8;
+  if (y < vb.top + 4) y = bottom + 8;
+  if (y + h > vb.bottom - 4 || bottom < vb.top || top > vb.bottom) { hlMenu.hidden = true; return; } // 选区不在眼前
+  hlMenu.style.left = Math.min(Math.max((left + right) / 2 - w / 2, vb.left + 8), vb.right - w - 8) + "px";
+  hlMenu.style.top = y + "px";
+}
+document.addEventListener("selectionchange", () => { if (barOn && getSelection().isCollapsed) hideHlMenu(); });
+window.addEventListener("resize", placeBar);
 
-// 在留着的选区上按下鼠标：不让浏览器把它点散、双击时也不让它改选成一个词，双击才能落在这个选区上出菜单。
-// 点在选区外面照旧：选区散掉，从那里重新选
+// 在留着的选区上按下鼠标：不让浏览器把它点散（也免得拖成拖拽文字），从别处按下就收起工具栏、让选区照常散掉
 document.addEventListener("mousedown", (e) => {
-  if (e.button !== 0 || !pdf || !selectionHit(e.clientX, e.clientY)) return;
-  e.preventDefault();
+  if (e.target.closest?.("#hl-menu")) return;
+  if (pdf && selectionHit(e.clientX, e.clientY)) { if (e.button === 0) e.preventDefault(); return; }
+  hideHlMenu();
 }, true);
-document.addEventListener("dblclick", (e) => {
-  if (e.button !== 0 || !pdf || !selectionHit(e.clientX, e.clientY)) return;
-  e.preventDefault();
-  if (getSelection().toString().trim().length < 2) return; // 只选中一个字不算划线（commitSelection 也不收）
-  showSelectionMenu(e.clientX, e.clientY);
-});
 
 document.addEventListener("click", (e) => {
   if (e.target.closest?.("#hl-menu")) return;
@@ -1328,7 +1352,7 @@ document.addEventListener("keydown", (e) => {
   const from = sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement;
   if (from?.closest("#viewer")) sel.removeAllRanges();
 });
-viewer.addEventListener("scroll", hideHlMenu, { passive: true });
+viewer.addEventListener("scroll", () => (barOn ? placeBar() : hideHlMenu()), { passive: true }); // 跟着选区的工具栏随滚动走，旧划线的菜单一滚就收
 
 // ---------- 给功能模块用的接口（框选、导读、导图） ----------
 
